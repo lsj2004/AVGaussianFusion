@@ -18,6 +18,10 @@ def write_eval_summary(
         raise ValueError(
             f"pred and target must have the same shape, got {pred.shape} and {target.shape}"
         )
+    if pred.numel() == 0:
+        raise ValueError("pred and target must be non-empty")
+    if not torch.is_floating_point(pred) or not torch.is_floating_point(target):
+        raise ValueError("pred and target must be floating-point tensors")
 
     l1_waveform = torch.mean(torch.abs(pred - target)).detach().cpu().item()
     summary = {"camera": camera, "l1_waveform": float(l1_waveform)}
