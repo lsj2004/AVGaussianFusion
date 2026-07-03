@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 import torch
@@ -83,3 +84,12 @@ def test_export_checkpoint_uses_loaded_object_without_gaussians_key(tmp_path):
 
     assert output_path.exists()
     assert torch.allclose(carrier.means, gs.means.detach())
+
+
+def test_export_script_runs_inside_ftgspp_environment():
+    script = Path("scripts/export_stage1_carrier.sh").read_text()
+
+    assert 'FTGSPP_ROOT="/mnt/sda/lisujing/Dataset/FreeTimeGSPlusPlus"' in script
+    assert 'cd "${FTGSPP_ROOT}"' in script
+    assert 'PYTHONPATH="${ROOT}:${FTGSPP_ROOT}:${PYTHONPATH:-}"' in script
+    assert "uv run --no-sync python -m avfusion.visual.export_ftgspp_carrier" in script
