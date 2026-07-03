@@ -15,13 +15,35 @@ def _sorted_camera_names(root: Path, suffix: str) -> list[str]:
     return sorted(_camera_name_from_path(p) for p in root.glob(f"cam*{suffix}"))
 
 
+def _load_visual_metadata(visual_root: Path) -> dict[str, object]:
+    manifest_path = visual_root / "manifest.json"
+    if not manifest_path.exists():
+        return {}
+    return json.loads(manifest_path.read_text())
+
+
+def _resolve_metadata_value(
+    name: str,
+    requested: float | int | None,
+    discovered: object,
+    fallback: float | int,
+) -> float | int:
+    if discovered is None:
+        return fallback if requested is None else requested
+    if requested is not None and requested != discovered:
+        raise ValueError(
+            f"{name} mismatch: requested={requested!r}, visual_manifest={discovered!r}"
+        )
+    return discovered
+
+
 def build_manifest(
     scene_id: str,
     visual_root: str | Path,
     audio_root: str | Path,
     heldout_camera: str = "cam10",
-    fps: float = 30.0,
-    num_frames: int = 150,
+    fps: float | None = None,
+    num_frames: int | None = None,
     sample_rate: int = 16000,
     crop_seconds: float = 3.0,
     output_path: str | Path | None = None,
@@ -29,6 +51,7 @@ def build_manifest(
     visual_root = Path(visual_root)
     audio_root = Path(audio_root)
     aligned_audio_root = audio_root / "aligned_16k_stereo"
+    visual_metadata = _load_visual_metadata(visual_root)
 
     video_names = _sorted_camera_names(visual_root, ".mp4")
     audio_names = _sorted_camera_names(aligned_audio_root, ".wav")
@@ -44,6 +67,16 @@ def build_manifest(
     source_path = aligned_audio_root / "near.wav"
     if not source_path.exists():
         raise FileNotFoundError(f"missing source audio: {source_path}")
+
+    fps = float(_resolve_metadata_value("fps", fps, visual_metadata.get("fps"), 30.0))
+    num_frames = int(
+        _resolve_metadata_value(
+            "num_frames", num_frames, visual_metadata.get("num_frames"), 150
+        )
+    )
+    manifest_camera_names = visual_metadata.get("camera_names")
+    if manifest_camera_names is not None and list(manifest_camera_names) != video_names:
+        raise ValueError("camera_names in visual manifest do not match cam*.mp4 files")
 
     cameras = {
         name: CameraRecord(
