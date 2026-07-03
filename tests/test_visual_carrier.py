@@ -1,4 +1,5 @@
 import torch
+import pytest
 
 from avfusion.visual.carrier import FrozenVisualCarrier
 
@@ -37,6 +38,9 @@ def test_carrier_asserts_frozen_tensors():
     )
 
     carrier.assert_frozen()
+    carrier.means.requires_grad_(True)
+    with pytest.raises(RuntimeError, match="means"):
+        carrier.assert_frozen()
 
 
 def test_carrier_save_load_round_trips(tmp_path):
