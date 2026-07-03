@@ -28,10 +28,13 @@ def _resolve_metadata_value(
     name: str,
     requested: float | int | None,
     discovered: object,
-    fallback: float | int,
 ) -> float | int:
     if discovered is None:
-        return fallback if requested is None else requested
+        if requested is None:
+            raise ValueError(
+                f"{name} must be provided when visual manifest metadata is absent"
+            )
+        return requested
     if requested is not None and requested != discovered:
         raise ValueError(
             f"{name} mismatch: requested={requested!r}, visual_manifest={discovered!r}"
@@ -99,10 +102,10 @@ def build_manifest(
                 f"sample_rate={audio_sample_rate}, channels={audio_channels}"
             )
 
-    fps = float(_resolve_metadata_value("fps", fps, visual_metadata.get("fps"), 30.0))
+    fps = float(_resolve_metadata_value("fps", fps, visual_metadata.get("fps")))
     num_frames = int(
         _resolve_metadata_value(
-            "num_frames", num_frames, visual_metadata.get("num_frames"), 150
+            "num_frames", num_frames, visual_metadata.get("num_frames")
         )
     )
     manifest_camera_names = visual_metadata.get("camera_names")

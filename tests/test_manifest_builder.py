@@ -143,5 +143,27 @@ def test_manifest_rejects_audio_metadata_mismatch(tmp_path):
             visual_root=visual,
             audio_root=audio,
             heldout_camera="cam01",
+            fps=30.0,
+            num_frames=10,
             sample_rate=8000,
+        )
+
+
+def test_manifest_requires_visual_timing_without_visual_manifest(tmp_path):
+    visual = tmp_path / "visual"
+    audio = tmp_path / "audio"
+    aligned = audio / "aligned_16k_stereo"
+    visual.mkdir()
+    aligned.mkdir(parents=True)
+    for name in ("cam00", "cam01"):
+        (visual / f"{name}.mp4").write_bytes(b"")
+        _write_wav(aligned / f"{name}.wav")
+    _write_wav(aligned / "near.wav")
+
+    with pytest.raises(ValueError, match="fps must be provided"):
+        build_manifest(
+            scene_id="toy",
+            visual_root=visual,
+            audio_root=audio,
+            heldout_camera="cam01",
         )
