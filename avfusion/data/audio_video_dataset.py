@@ -10,14 +10,30 @@ from torch.utils.data import Dataset
 from avfusion.data.manifest import SceneManifest
 
 
-def _read_audio_crop(path: str, crop_samples: int) -> torch.Tensor:
-    audio, _ = sf.read(path, always_2d=True, dtype="float32")
+def _read_audio_crop(
+    path: str,
+    crop_samples: int,
+    sample_rate: int,
+    channels: int,
+) -> torch.Tensor:
+    audio, actual_sample_rate = sf.read(path, always_2d=True, dtype="float32")
+    if int(actual_sample_rate) != int(sample_rate):
+        raise ValueError(
+            f"sample rate mismatch for {path}: "
+            f"manifest={sample_rate}, wav={actual_sample_rate}"
+        )
+    if audio.shape[1] != int(channels):
+        raise ValueError(
+            f"channel mismatch for {path}: manifest={channels}, wav={audio.shape[1]}"
+        )
     if len(audio) < crop_samples:
         pad = np.zeros((crop_samples - len(audio), audio.shape[1]), dtype=np.float32)
         audio = np.concatenate([audio, pad], axis=0)
-    audio = audio[:crop_samples, :2]
     if audio.shape[1] == 1:
         audio = np.repeat(audio, 2, axis=1)
+    if audio.shape[1] != 2:
+        raise ValueError(f"expected mono or stereo audio for {path}, got {audio.shape[1]}")
+    audio = audio[:crop_samples, :]
     return torch.from_numpy(audio.T.copy())
 
 
@@ -32,6 +48,12 @@ class AudioCropDataset(Dataset):
             if split == "train"
             else self.manifest.eval_cameras
         )
+        self._source_audio = _read_audio_crop(
+            self.manifest.audio.source_path,
+            self.manifest.audio.crop_samples,
+            self.manifest.audio.sample_rate,
+            self.manifest.audio.channels,
+        )
 
     def __len__(self) -> int:
         return len(self.camera_names)
@@ -42,8 +64,11 @@ class AudioCropDataset(Dataset):
         crop_samples = self.manifest.audio.crop_samples
         return {
             "camera": camera,
-            "source_audio": _read_audio_crop(
-                self.manifest.audio.source_path, crop_samples
+            "source_audio": self._source_audio.clone(),
+            "target_audio": _read_audio_crop(
+                record.audio_path,
+                crop_samples,
+                self.manifest.audio.sample_rate,
+                self.manifest.audio.channels,
             ),
-            "target_audio": _read_audio_crop(record.audio_path, crop_samples),
         }
