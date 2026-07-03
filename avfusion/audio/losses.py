@@ -14,6 +14,12 @@ def stft_magnitude_loss(
         raise ValueError(
             f"shape mismatch: pred={tuple(pred.shape)} target={tuple(target.shape)}"
         )
+    if pred.ndim != 2:
+        raise ValueError(f"audio tensors must be 2-D, got {pred.ndim} dimensions")
+    if pred.shape[-1] < n_fft:
+        raise ValueError(
+            f"audio length {pred.shape[-1]} is shorter than n_fft={n_fft}"
+        )
 
     window = torch.hann_window(n_fft, device=pred.device, dtype=pred.dtype)
     pred_mag = torch.stft(

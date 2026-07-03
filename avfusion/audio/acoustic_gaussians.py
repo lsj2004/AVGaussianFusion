@@ -12,6 +12,13 @@ class AcousticGaussianParameters(nn.Module):
 
     def aggregate(self, opacity: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         opacity = opacity.to(device=self.mono_gain.device, dtype=self.mono_gain.dtype)
+        if opacity.ndim != 2 or opacity.shape[1] != 1:
+            raise ValueError(f"opacity must have shape (N, 1), got {tuple(opacity.shape)}")
+        if opacity.shape[0] != self.mono_gain.shape[0]:
+            raise ValueError(
+                f"opacity point count {opacity.shape[0]} does not match "
+                f"parameters {self.mono_gain.shape[0]}"
+            )
         weights = opacity / opacity.sum().clamp_min(1e-6)
         mono = torch.tanh((weights * self.mono_gain).sum())
         diff = torch.tanh((weights * self.diff_gain).sum())
