@@ -23,6 +23,10 @@ def test_carrier_query_uses_velocity_and_temporal_opacity():
     assert state.opacity.shape == (2, 1)
     assert not state.xyz.requires_grad
     assert not state.opacity.requires_grad
+    expected_opacity = torch.sigmoid(torch.tensor([[0.0], [2.0]])) * torch.exp(
+        -0.5 * torch.tensor([[0.5], [0.0]]) ** 2
+    )
+    assert torch.allclose(state.opacity, expected_opacity)
 
 
 def test_carrier_asserts_frozen_tensors():
@@ -63,3 +67,48 @@ def test_carrier_save_load_round_trips(tmp_path):
     assert torch.allclose(loaded.velocities, carrier.velocities)
     assert loaded.max_duration == carrier.max_duration
     loaded.assert_frozen()
+
+
+def test_carrier_snapshots_inputs_and_returned_state():
+    means = torch.zeros(1, 3)
+    scales = torch.zeros(1, 3)
+    carrier = FrozenVisualCarrier(
+        means=means,
+        scales=scales,
+        quats=torch.ones(1, 4),
+        opacities=torch.zeros(1, 1),
+        times=torch.zeros(1, 1),
+        durations=torch.zeros(1, 1),
+        velocities=torch.zeros(1, 3),
+        max_duration=float("inf"),
+    )
+
+    means.add_(5.0)
+    state = carrier.query(0.0)
+    state.scales.add_(3.0)
+
+    assert torch.allclose(carrier.means, torch.zeros(1, 3))
+    assert torch.allclose(carrier.scales, torch.zeros(1, 3))
+
+
+def test_carrier_uses_marginal_gate_and_finite_duration():
+    carrier = FrozenVisualCarrier(
+        means=torch.zeros(1, 3),
+        scales=torch.zeros(1, 3),
+        quats=torch.ones(1, 4),
+        opacities=torch.zeros(1, 1),
+        times=torch.zeros(1, 1),
+        durations=torch.zeros(1, 1),
+        velocities=torch.zeros(1, 3),
+        max_duration=6.0,
+        marginal_gates=torch.zeros(1, 1),
+    )
+
+    state = carrier.query(1.0)
+
+    gate = torch.sigmoid(torch.tensor([[0.0]]))
+    temporal_scale = torch.sigmoid(torch.tensor([[0.0]]))
+    gaussian_opacity = torch.exp(-0.5 * (torch.ones(1, 1) / temporal_scale) ** 2)
+    expected_temporal = gate + (1 - gate) * gaussian_opacity
+    expected = torch.sigmoid(torch.zeros(1, 1)) * expected_temporal
+    assert torch.allclose(state.opacity, expected)
