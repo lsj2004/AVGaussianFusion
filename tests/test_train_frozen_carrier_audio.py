@@ -45,7 +45,7 @@ def test_main_parses_args_and_exits_with_placeholder():
                 "--manifest",
                 "runs/scene1_opera_a/scene_manifest.json",
                 "--carrier",
-                "runs/scene1_opera_a/frozen_carrier.pt",
+                "runs/scene1_opera_a/carrier.pt",
                 "--steps",
                 "1000",
                 "--lr",
