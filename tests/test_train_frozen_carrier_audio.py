@@ -2,6 +2,7 @@ import pytest
 import torch
 
 from avfusion.adapters.visual_to_acoustic import AcousticCarrier
+from avfusion.audio import AcousticGaussianParameters
 from avfusion.train.train_frozen_carrier_audio import main, train_one_step
 from avfusion.visual.carrier import FrozenVisualCarrier
 
@@ -23,12 +24,16 @@ def test_train_one_step_optimizes_audio_without_mutating_visual_carrier():
         opacity=torch.ones(4, 1),
         visual_indices=torch.arange(4),
     )
-    source = torch.randn(2, 2048)
+    source = torch.linspace(-1.0, 1.0, 2048).repeat(2, 1)
     target = source * 0.5
+    params = AcousticGaussianParameters(num_points=4)
+    before = params.mono_gain.detach().clone()
 
-    loss = train_one_step(acoustic, source, target, lr=0.0005)
+    loss, updated = train_one_step(acoustic, source, target, lr=0.01, params=params)
 
     assert loss > 0
+    assert updated is params
+    assert not torch.allclose(params.mono_gain.detach(), before)
     assert torch.allclose(carrier.means, original_means)
     carrier.assert_frozen()
 

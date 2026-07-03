@@ -14,8 +14,10 @@ def train_one_step(
     source_audio: torch.Tensor,
     target_audio: torch.Tensor,
     lr: float,
-) -> float:
-    params = AcousticGaussianParameters(num_points=acoustic_carrier.xyz.shape[0])
+    params: AcousticGaussianParameters | None = None,
+) -> tuple[float, AcousticGaussianParameters]:
+    if params is None:
+        params = AcousticGaussianParameters(num_points=acoustic_carrier.xyz.shape[0])
     optimizer = torch.optim.Adam(params.parameters(), lr=lr)
 
     optimizer.zero_grad(set_to_none=True)
@@ -24,7 +26,7 @@ def train_one_step(
     loss.backward()
     optimizer.step()
 
-    return float(loss.detach().cpu().item())
+    return float(loss.detach().cpu().item()), params
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
