@@ -20,4 +20,5 @@ Config:
 
 ```bash
 configs/scene1_opera_a_frozen_carrier.yaml
+configs/ftgspp_scene1_opera/scene1_opera.toml
 ```

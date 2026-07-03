@@ -15,3 +15,12 @@ def test_scene1_config_has_route_a_defaults():
     assert cfg["audio"]["enable_phase_modeling"] is False
     assert cfg["paths"]["visual_root"] == "/mnt/sda/lisujing/Dataset/Sampled_data/v5_0630_dynerf/scene1_opera"
     assert cfg["paths"]["audio_root"] == "/mnt/sda/lisujing/Dataset/Sampled_data/v5_0630_audiogs_audio/scene1_opera"
+
+
+def test_ftgspp_scene1_config_matches_route_a_data_and_split():
+    cfg_path = Path("configs/ftgspp_scene1_opera/scene1_opera.toml")
+    text = cfg_path.read_text()
+
+    assert "Sampled_data/v5_0630_dynerf/scene1_opera" in text
+    assert "eval_cameras = [10]" in text
+    assert "frames = { \"start\" = 0, \"stop\" = 150 }" in text
