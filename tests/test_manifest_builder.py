@@ -1,4 +1,5 @@
 import json
+import wave
 from pathlib import Path
 
 import pytest
@@ -9,8 +10,20 @@ from avfusion.data.manifest import SceneManifest
 
 VISUAL_ROOT = Path("/mnt/sda/lisujing/Dataset/Sampled_data/v5_0630_dynerf/scene1_opera")
 AUDIO_ROOT = Path("/mnt/sda/lisujing/Dataset/Sampled_data/v5_0630_audiogs_audio/scene1_opera")
+REAL_DATA_AVAILABLE = (
+    VISUAL_ROOT.exists() and (AUDIO_ROOT / "aligned_16k_stereo" / "near.wav").exists()
+)
 
 
+def _write_wav(path: Path, sample_rate: int = 16000, channels: int = 2) -> None:
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(channels)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(b"\x00\x00" * (channels * sample_rate // 100))
+
+
+@pytest.mark.skipif(not REAL_DATA_AVAILABLE, reason="scene1_opera local data is absent")
 def test_build_manifest_matches_camera_sets(tmp_path):
     manifest = build_manifest(
         scene_id="scene1_opera",
@@ -34,6 +47,7 @@ def test_build_manifest_matches_camera_sets(tmp_path):
     assert manifest.audio.crop_samples == 48000
 
 
+@pytest.mark.skipif(not REAL_DATA_AVAILABLE, reason="scene1_opera local data is absent")
 def test_manifest_writes_json(tmp_path):
     out = tmp_path / "scene_manifest.json"
     manifest = build_manifest(
@@ -59,8 +73,8 @@ def test_manifest_loads_round_trip_from_temp_scene(tmp_path):
     aligned.mkdir(parents=True)
     for name in ("cam00", "cam01"):
         (visual / f"{name}.mp4").write_bytes(b"")
-        (aligned / f"{name}.wav").write_bytes(b"")
-    (aligned / "near.wav").write_bytes(b"")
+        _write_wav(aligned / f"{name}.wav")
+    _write_wav(aligned / "near.wav")
     (visual / "manifest.json").write_text(
         json.dumps(
             {
@@ -96,8 +110,8 @@ def test_manifest_rejects_visual_metadata_mismatch(tmp_path):
     aligned.mkdir(parents=True)
     for name in ("cam00", "cam01"):
         (visual / f"{name}.mp4").write_bytes(b"")
-        (aligned / f"{name}.wav").write_bytes(b"")
-    (aligned / "near.wav").write_bytes(b"")
+        _write_wav(aligned / f"{name}.wav")
+    _write_wav(aligned / "near.wav")
     (visual / "manifest.json").write_text(
         json.dumps({"fps": 24.0, "num_frames": 12, "camera_names": ["cam00", "cam01"]})
     )
@@ -109,4 +123,25 @@ def test_manifest_rejects_visual_metadata_mismatch(tmp_path):
             audio_root=audio,
             heldout_camera="cam01",
             fps=30.0,
+        )
+
+
+def test_manifest_rejects_audio_metadata_mismatch(tmp_path):
+    visual = tmp_path / "visual"
+    audio = tmp_path / "audio"
+    aligned = audio / "aligned_16k_stereo"
+    visual.mkdir()
+    aligned.mkdir(parents=True)
+    for name in ("cam00", "cam01"):
+        (visual / f"{name}.mp4").write_bytes(b"")
+        _write_wav(aligned / f"{name}.wav")
+    _write_wav(aligned / "near.wav")
+
+    with pytest.raises(ValueError, match="sample_rate mismatch"):
+        build_manifest(
+            scene_id="toy",
+            visual_root=visual,
+            audio_root=audio,
+            heldout_camera="cam01",
+            sample_rate=8000,
         )

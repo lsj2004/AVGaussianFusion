@@ -4,6 +4,8 @@ import argparse
 import json
 from pathlib import Path
 
+import soundfile as sf
+
 from avfusion.data.manifest import AudioSpec, CameraRecord, SceneManifest
 
 
@@ -37,6 +39,21 @@ def _resolve_metadata_value(
     return discovered
 
 
+def _resolve_audio_value(
+    name: str,
+    requested: int | None,
+    discovered: int,
+) -> int:
+    if requested is not None and requested != discovered:
+        raise ValueError(f"{name} mismatch: requested={requested!r}, wav={discovered!r}")
+    return discovered
+
+
+def _audio_info(path: Path) -> tuple[int, int]:
+    info = sf.info(path)
+    return int(info.samplerate), int(info.channels)
+
+
 def build_manifest(
     scene_id: str,
     visual_root: str | Path,
@@ -44,7 +61,8 @@ def build_manifest(
     heldout_camera: str = "cam10",
     fps: float | None = None,
     num_frames: int | None = None,
-    sample_rate: int = 16000,
+    sample_rate: int | None = None,
+    channels: int | None = None,
     crop_seconds: float = 3.0,
     output_path: str | Path | None = None,
 ) -> SceneManifest:
@@ -67,6 +85,19 @@ def build_manifest(
     source_path = aligned_audio_root / "near.wav"
     if not source_path.exists():
         raise FileNotFoundError(f"missing source audio: {source_path}")
+
+    discovered_sample_rate, discovered_channels = _audio_info(source_path)
+    sample_rate = _resolve_audio_value(
+        "sample_rate", sample_rate, discovered_sample_rate
+    )
+    channels = _resolve_audio_value("channels", channels, discovered_channels)
+    for name in audio_names:
+        audio_sample_rate, audio_channels = _audio_info(aligned_audio_root / f"{name}.wav")
+        if audio_sample_rate != sample_rate or audio_channels != channels:
+            raise ValueError(
+                f"audio metadata mismatch for {name}: "
+                f"sample_rate={audio_sample_rate}, channels={audio_channels}"
+            )
 
     fps = float(_resolve_metadata_value("fps", fps, visual_metadata.get("fps"), 30.0))
     num_frames = int(
@@ -101,7 +132,7 @@ def build_manifest(
         eval_cameras=[heldout_camera],
         audio=AudioSpec(
             sample_rate=int(sample_rate),
-            channels=2,
+            channels=int(channels),
             crop_seconds=float(crop_seconds),
             crop_samples=int(round(sample_rate * crop_seconds)),
             source_path=str(source_path),
