@@ -9,4 +9,4 @@ cd "${FTGSPP}"
 uv run --no-sync ./run dynerf "${ROOT}/configs/ftgspp_scene1_opera" "${OUT}" \
   --scenes scene1_opera \
   --from extract \
-  --to train
+  --to eval

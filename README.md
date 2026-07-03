@@ -5,6 +5,12 @@ Route A prototype for `scene1_opera`: train FreeTimeGS++ as the dynamic visual G
 ## First Route A Commands
 
 ```bash
+scripts/run_full_scene1_opera.sh
+```
+
+Or run each stage manually:
+
+```bash
 scripts/prepare_scene1_opera.sh
 scripts/run_stage1_ftgspp.sh
 scripts/export_stage1_carrier.sh /path/to/ftgspp_checkpoint.pt

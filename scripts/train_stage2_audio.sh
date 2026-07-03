@@ -8,5 +8,7 @@ UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/avgaussianfusion-uv-cache}" \
 uv run python -m avfusion.train.train_frozen_carrier_audio \
   --manifest "${RUN_DIR}/scene_manifest.json" \
   --carrier "${RUN_DIR}/carrier.pt" \
+  --output "${RUN_DIR}/stage2_audio.pt" \
   --steps 1000 \
-  --lr 0.0005
+  --lr 0.0005 \
+  --top-k 8192
