@@ -33,8 +33,16 @@ class FTGSRendererBridge:
         return self
 
     def render_rgb(self, batch: dict[str, Any], sh_degree: int | None = None) -> Tensor:
+        time = torch.as_tensor(batch["time"])
+        first_time = time.reshape(-1)[0]
+        if time.numel() > 1 and not torch.allclose(time, first_time.expand_as(time)):
+            raise ValueError(
+                "FTGSRendererBridge.render_rgb requires all cameras in a batch "
+                "to share the same time."
+            )
+        render_time = time if time.ndim == 0 else time[0]
         image, _, _ = self.gaussians(
-            t=batch["time"][0],
+            t=render_time,
             w2c=batch["w2c"],
             intrinsic=batch["intrinsic"],
             shape=(int(batch["height"]), int(batch["width"])),

@@ -44,6 +44,20 @@ def test_bridge_render_rgb_calls_gaussian_forward():
     assert image.requires_grad
 
 
+def test_bridge_render_rgb_rejects_mixed_time_batch():
+    bridge = FTGSRendererBridge(FakeGaussians())
+    batch = {
+        "time": torch.tensor([[0.0], [0.5]]),
+        "w2c": torch.eye(4).reshape(1, 4, 4).repeat(2, 1, 1),
+        "intrinsic": torch.eye(3).reshape(1, 3, 3).repeat(2, 1, 1),
+        "height": 2,
+        "width": 3,
+    }
+
+    with pytest.raises(ValueError, match="same time|mixed"):
+        bridge.render_rgb(batch)
+
+
 def test_bridge_query_state_keeps_gradient_to_shared_geometry():
     bridge = FTGSRendererBridge(FakeGaussians())
 
