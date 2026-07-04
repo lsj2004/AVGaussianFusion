@@ -43,6 +43,25 @@ class MissingVelocityGaussians(torch.nn.Module):
         return torch.ones(4, 1)
 
 
+class VelocityFunctionGaussians(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.means = torch.nn.Parameter(torch.zeros(4, 3))
+        self.opacities = torch.nn.Parameter(torch.zeros(4, 1))
+
+    def forward(self, t, w2c, intrinsic, shape, sh_degree=None, clamp=True):
+        return torch.zeros(1, 1, 1, 3), torch.zeros(1, 1, 1, 1), {}
+
+    def means_t(self, t):
+        return self.means
+
+    def opacities_t(self, t):
+        return self.opacities.sigmoid()
+
+    def velocities_t(self, t):
+        return torch.ones_like(self.means)
+
+
 def test_bridge_render_rgb_calls_gaussian_forward():
     bridge = FTGSRendererBridge(FakeGaussians())
     batch = {
@@ -82,6 +101,14 @@ def test_bridge_query_state_keeps_gradient_to_shared_geometry():
 
     assert bridge.gaussians.means.grad is not None
     assert bridge.gaussians.opacities.grad is not None
+
+
+def test_bridge_query_state_supports_velocity_function_without_velocity_model():
+    bridge = FTGSRendererBridge(VelocityFunctionGaussians())
+
+    state = bridge.query_state(torch.tensor([[0.5]]))
+
+    assert torch.equal(state["velocity"], torch.ones(4, 3))
 
 
 def test_load_checkpoint_reports_missing_ftgspp_dependency(monkeypatch, tmp_path):

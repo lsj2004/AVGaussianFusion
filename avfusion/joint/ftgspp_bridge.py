@@ -76,7 +76,7 @@ class FTGSRendererBridge:
         }
 
     def _velocity_at(self, t: Tensor) -> Tensor:
-        velocity_model = getattr(self.gaussians, "velocity_model")
+        velocity_model = getattr(self.gaussians, "velocity_model", None)
         if isinstance(velocity_model, torch.Tensor):
             return velocity_model
         return self.gaussians.velocities_t(t)
