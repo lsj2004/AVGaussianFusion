@@ -30,11 +30,11 @@ configs/scene1_opera_a_frozen_carrier.yaml
 configs/ftgspp_scene1_opera/scene1_opera.toml
 ```
 
-## Route B Joint AV Scaffold
+## Route B Joint AV Audio Warmup
 
 Route A frozen-carrier training remains the baseline and keeps writing only under
-`runs/scene1_opera_a`. Route B initializes a joint AV checkpoint from the Route A
-FTGS++ carrier checkpoint and writes to
+`runs/scene1_opera_a`. Route B initializes shared Gaussians from the Route A
+FTGS++ checkpoint, optimizes the geometry-aware joint audio head, and writes to
 `runs/scene1_opera_b_joint_av`.
 
 ```bash
@@ -42,8 +42,9 @@ scripts/train_joint_scene1_opera.sh
 scripts/eval_joint_scene1_opera.sh
 ```
 
-`scripts/eval_joint_scene1_opera.sh` is currently a smoke/status placeholder
-for the Route B checkpoint and does not report metrics yet.
+`scripts/eval_joint_scene1_opera.sh` reports AudioGS-style heldout audio metrics
+for the Route B checkpoint, including `MAG`, `ENV`, `LRE`, `RTE`, and optional
+`DPAM`.
 
 Route B config:
 

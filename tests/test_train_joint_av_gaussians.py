@@ -6,7 +6,10 @@ from avfusion.train.train_joint_av_gaussians import (
     build_model,
     resolve_training_config,
     save_joint_checkpoint,
+    train_audio_warmup,
+    train_and_save,
 )
+from tests.test_audio_video_dataset import _write_manifest
 from tests.test_joint_ftgspp_bridge import FakeGaussians
 
 
@@ -164,6 +167,58 @@ def test_save_joint_checkpoint_writes_route_b_schema(tmp_path):
     assert checkpoint["audio_head"]["mono_gain"].shape == (4, 1)
     assert checkpoint["config"] == config
     assert checkpoint["loss_history"] == [0.5, 0.25]
+
+
+def test_train_audio_warmup_updates_audio_head_and_records_losses(tmp_path):
+    manifest = _write_manifest(tmp_path)
+    model = build_model_from_fake(top_k=4)
+
+    before = model.audio_head.mono_gain.detach().clone()
+    loss_history = train_audio_warmup(
+        model=model,
+        manifest_path=manifest,
+        steps=2,
+        lr=1e-3,
+    )
+
+    assert len(loss_history) == 2
+    assert all(loss > 0 for loss in loss_history)
+    assert not torch.equal(model.audio_head.mono_gain.detach(), before)
+
+
+def test_train_and_save_writes_audio_warmup_checkpoint(monkeypatch, tmp_path):
+    manifest = _write_manifest(tmp_path)
+    checkpoint_path = tmp_path / "ftgs.pt"
+    output_path = tmp_path / "joint_trained.pt"
+
+    def fake_load_checkpoint(path):
+        assert path == checkpoint_path
+        from avfusion.joint.ftgspp_bridge import FTGSRendererBridge
+
+        return FTGSRendererBridge(FakeGaussians())
+
+    monkeypatch.setattr(
+        "avfusion.train.train_joint_av_gaussians.FTGSRendererBridge.load_checkpoint",
+        fake_load_checkpoint,
+    )
+
+    summary = train_and_save(
+        manifest_path=manifest,
+        ftgspp_checkpoint=checkpoint_path,
+        output_path=output_path,
+        warmup_steps=2,
+        joint_steps=0,
+        top_k=4,
+        audio_lr=1e-3,
+        shared_lr=1e-5,
+        config_path=None,
+    )
+
+    checkpoint = torch.load(output_path, map_location="cpu", weights_only=False)
+    assert summary["stage"] == "audio_warmup"
+    assert summary["steps"] == 2
+    assert checkpoint["stage"] == "audio_warmup"
+    assert len(checkpoint["loss_history"]) == 2
 
 
 def test_build_model_clamps_top_k_to_available_gaussians(monkeypatch, tmp_path):

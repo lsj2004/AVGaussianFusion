@@ -3,12 +3,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd)"
+FTGSPP_ROOT="/mnt/sda/lisujing/Dataset/FreeTimeGSPlusPlus"
 RUN_DIR="${ROOT}/runs/scene1_opera_b_joint_av"
-CHECKPOINT="${RUN_DIR}/joint_initialized.pt"
+MANIFEST="${ROOT}/runs/scene1_opera_a/scene_manifest.json"
+CHECKPOINT="${RUN_DIR}/joint_audio_warmup.pt"
 EVAL_DIR="${ROOT}/runs/scene1_opera_b_joint_av/eval"
-STATUS_FILE="${EVAL_DIR}/route_b_eval_status.txt"
 
-cd "${ROOT}"
+cd "${FTGSPP_ROOT}"
 mkdir -p "${EVAL_DIR}"
 
 if [[ ! -f "${CHECKPOINT}" ]]; then
@@ -17,12 +18,9 @@ if [[ ! -f "${CHECKPOINT}" ]]; then
   exit 1
 fi
 
-MESSAGE="Route B checkpoint schema is not yet compatible with avfusion.eval.eval_audio; this smoke/status placeholder writes no metrics. Add a Route B joint AV evaluator before reporting metrics."
-{
-  printf '%s\n' "${MESSAGE}"
-  printf 'metrics=none\n'
-  printf 'checkpoint=%s\n' "${CHECKPOINT}"
-} > "${STATUS_FILE}"
-
-echo "${MESSAGE}"
-echo "wrote smoke eval status: ${STATUS_FILE}"
+PYTHONPATH="${ROOT}:${FTGSPP_ROOT}:${PYTHONPATH:-}" \
+UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/avgaussianfusion-uv-cache}" \
+uv run --no-sync --with pyyaml --with soundfile python -m avfusion.eval.eval_joint_audio \
+  --manifest "${MANIFEST}" \
+  --checkpoint "${CHECKPOINT}" \
+  --output-dir "${EVAL_DIR}"

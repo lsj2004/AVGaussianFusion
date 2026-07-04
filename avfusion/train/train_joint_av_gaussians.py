@@ -9,6 +9,8 @@ from typing import Any
 import torch
 import yaml
 
+from avfusion.audio import stft_magnitude_loss
+from avfusion.data.audio_video_dataset import AudioCropDataset
 from avfusion.joint.audio_head import JointAudioHead
 from avfusion.joint.ftgspp_bridge import FTGSRendererBridge
 from avfusion.joint.model import JointAVGaussianModel
@@ -173,26 +175,101 @@ def save_joint_checkpoint(
     )
 
 
+def train_audio_warmup(
+    model: JointAVGaussianModel,
+    manifest_path: str | Path,
+    steps: int,
+    lr: float,
+) -> list[float]:
+    if steps <= 0:
+        return []
+    dataset = AudioCropDataset(manifest_path, split="train")
+    if len(dataset) == 0:
+        raise ValueError("training split is empty")
+
+    model.freeze_shared()
+    optimizer = torch.optim.Adam(model.audio_head.parameters(), lr=lr)
+    loss_history: list[float] = []
+    render_time = torch.tensor([[0.0]])
+
+    for step in range(steps):
+        sample = dataset[step % len(dataset)]
+        optimizer.zero_grad(set_to_none=True)
+        pred = model.render_audio(render_time, sample["source_audio"])
+        target = sample["target_audio"].to(pred)
+        loss = stft_magnitude_loss(pred, target)
+        loss.backward()
+        optimizer.step()
+        loss_history.append(float(loss.detach().cpu().item()))
+
+    return loss_history
+
+
+def train_and_save(
+    manifest_path: str | Path,
+    ftgspp_checkpoint: str | Path,
+    output_path: str | Path,
+    warmup_steps: int,
+    joint_steps: int,
+    top_k: int,
+    audio_lr: float,
+    shared_lr: float,
+    config_path: str | Path | None,
+) -> dict[str, float | int | str]:
+    model = build_model(ftgspp_checkpoint, top_k=top_k)
+    loss_history = train_audio_warmup(
+        model=model,
+        manifest_path=manifest_path,
+        steps=warmup_steps,
+        lr=audio_lr,
+    )
+    stage = "audio_warmup" if warmup_steps > 0 else "initialized"
+    config = {
+        "manifest": str(manifest_path),
+        "ftgspp_checkpoint": str(ftgspp_checkpoint),
+        "output": str(output_path),
+        "warmup_steps": int(warmup_steps),
+        "joint_steps": int(joint_steps),
+        "top_k": int(top_k),
+        "audio_lr": float(audio_lr),
+        "shared_lr": float(shared_lr),
+        "config": str(config_path) if config_path is not None else None,
+        "implemented_stages": ["audio_warmup"] if warmup_steps > 0 else [],
+    }
+    save_joint_checkpoint(
+        output_path=output_path,
+        model=model,
+        stage=stage,
+        ftgspp_checkpoint=ftgspp_checkpoint,
+        manifest_path=manifest_path,
+        config=config,
+        loss_history=loss_history,
+    )
+    return {
+        "route": "B_joint_av",
+        "stage": stage,
+        "steps": int(warmup_steps),
+        "joint_steps_requested": int(joint_steps),
+        "final_loss": loss_history[-1] if loss_history else 0.0,
+        "output": str(output_path),
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     args = build_arg_parser().parse_args(argv)
     config = resolve_training_config(args)
-    model = build_model(config.ftgspp_checkpoint, top_k=config.top_k)
-    save_joint_checkpoint(
-        output_path=config.output,
-        model=model,
-        stage="initialized",
-        ftgspp_checkpoint=config.ftgspp_checkpoint,
+    summary = train_and_save(
         manifest_path=config.manifest,
-        config=asdict(config),
-        loss_history=[],
+        ftgspp_checkpoint=config.ftgspp_checkpoint,
+        output_path=config.output,
+        warmup_steps=config.warmup_steps,
+        joint_steps=config.joint_steps,
+        top_k=config.top_k,
+        audio_lr=config.audio_lr,
+        shared_lr=config.shared_lr,
+        config_path=config.config,
     )
-    print(
-        {
-            "route": "B_joint_av",
-            "stage": "initialized",
-            "output": config.output,
-        }
-    )
+    print({**summary, "config": asdict(config)})
 
 
 if __name__ == "__main__":
