@@ -77,3 +77,12 @@ def test_load_checkpoint_reports_missing_ftgspp_dependency(monkeypatch, tmp_path
 
     with pytest.raises(FTGSDependencyError, match="FTGS"):
         FTGSRendererBridge.load_checkpoint(tmp_path / "gaussians.pt")
+
+
+def test_load_checkpoint_rejects_unsupported_payload_with_clear_error(monkeypatch, tmp_path):
+    checkpoint_path = tmp_path / "unsupported.pt"
+    torch.save({"not_gaussians": torch.zeros(1)}, checkpoint_path)
+    monkeypatch.setattr("importlib.import_module", lambda name: object())
+
+    with pytest.raises(TypeError, match='raw FTGS\\+\\+ Gaussians module|dict with "gaussians"'):
+        FTGSRendererBridge.load_checkpoint(checkpoint_path)

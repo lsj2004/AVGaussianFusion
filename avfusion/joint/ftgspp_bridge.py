@@ -29,6 +29,12 @@ class FTGSRendererBridge:
         if isinstance(checkpoint, dict) and "gaussians" in checkpoint:
             checkpoint = checkpoint["gaussians"]
         gaussians = checkpoint
+        required_attrs = ("means", "means_t", "opacities_t")
+        if not all(hasattr(gaussians, attr) for attr in required_attrs):
+            raise TypeError(
+                "Unsupported FTGS checkpoint payload. Expected a raw FTGS++ Gaussians module "
+                'or a dict with "gaussians".'
+            )
         return cls(gaussians)
 
     def to(self, device: torch.device | str) -> "FTGSRendererBridge":
