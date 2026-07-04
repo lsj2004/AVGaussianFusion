@@ -28,6 +28,21 @@ class FakeGaussians(torch.nn.Module):
         return self.opacities.sigmoid()
 
 
+class MissingVelocityGaussians(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.means = torch.nn.Parameter(torch.zeros(4, 3))
+
+    def forward(self, t, w2c, intrinsic, shape, sh_degree=None, clamp=True):
+        return torch.zeros(1, 1, 1, 3), torch.zeros(1, 1, 1, 1), {}
+
+    def means_t(self, t):
+        return self.means
+
+    def opacities_t(self, t):
+        return torch.ones(4, 1)
+
+
 def test_bridge_render_rgb_calls_gaussian_forward():
     bridge = FTGSRendererBridge(FakeGaussians())
     batch = {
@@ -75,7 +90,17 @@ def test_load_checkpoint_reports_missing_ftgspp_dependency(monkeypatch, tmp_path
 
     monkeypatch.setattr("importlib.import_module", fake_import)
 
-    with pytest.raises(FTGSDependencyError, match="FTGS"):
+    with pytest.raises(FTGSDependencyError, match="FTGS\\+\\+|tinycudann|CUDA"):
+        FTGSRendererBridge.load_checkpoint(tmp_path / "gaussians.pt")
+
+
+def test_load_checkpoint_reports_tinycudann_runtime_errors(monkeypatch, tmp_path):
+    def fake_import(name):
+        raise OSError("Unknown compute capability")
+
+    monkeypatch.setattr("importlib.import_module", fake_import)
+
+    with pytest.raises(FTGSDependencyError, match="tinycudann|CUDA|FTGS\\+\\+"):
         FTGSRendererBridge.load_checkpoint(tmp_path / "gaussians.pt")
 
 
@@ -85,4 +110,13 @@ def test_load_checkpoint_rejects_unsupported_payload_with_clear_error(monkeypatc
     monkeypatch.setattr("importlib.import_module", lambda name: object())
 
     with pytest.raises(TypeError, match='raw FTGS\\+\\+ Gaussians module|dict with "gaussians"'):
+        FTGSRendererBridge.load_checkpoint(checkpoint_path)
+
+
+def test_load_checkpoint_rejects_payload_without_velocity_surface(monkeypatch, tmp_path):
+    checkpoint_path = tmp_path / "missing_velocity.pt"
+    torch.save(MissingVelocityGaussians(), checkpoint_path)
+    monkeypatch.setattr("importlib.import_module", lambda name: object())
+
+    with pytest.raises(TypeError, match="velocity|rendering|dict"):
         FTGSRendererBridge.load_checkpoint(checkpoint_path)

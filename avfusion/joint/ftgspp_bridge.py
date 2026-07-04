@@ -21,19 +21,28 @@ class FTGSRendererBridge:
         try:
             importlib.import_module("ftgspp.models.gaussians")
             importlib.import_module("gsplat")
-        except ImportError as error:
+        except (ImportError, OSError) as error:
             raise FTGSDependencyError(
-                "Route B joint training requires the FTGS++ environment with ftgspp and gsplat importable."
+                "Route B joint training requires a working FTGS++/gsplat/tinycudann "
+                "environment. Check CUDA availability and run from the FTGS++ runtime."
             ) from error
-        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        try:
+            checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        except OSError as error:
+            raise FTGSDependencyError(
+                "Failed to load the FTGS++ checkpoint in the current runtime. Check the "
+                "FTGS++/tinycudann/CUDA environment and checkpoint path."
+            ) from error
         if isinstance(checkpoint, dict) and "gaussians" in checkpoint:
             checkpoint = checkpoint["gaussians"]
         gaussians = checkpoint
         required_attrs = ("means", "means_t", "opacities_t")
-        if not all(hasattr(gaussians, attr) for attr in required_attrs):
+        has_state = all(hasattr(gaussians, attr) for attr in required_attrs)
+        has_velocity = hasattr(gaussians, "velocity_model") or hasattr(gaussians, "velocities_t")
+        if not has_state or not has_velocity or not callable(gaussians):
             raise TypeError(
                 "Unsupported FTGS checkpoint payload. Expected a raw FTGS++ Gaussians module "
-                'or a dict with "gaussians".'
+                'or a dict with "gaussians" that supports rendering and velocity queries.'
             )
         return cls(gaussians)
 
