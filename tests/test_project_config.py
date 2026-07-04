@@ -45,6 +45,7 @@ def test_scene1_route_b_config_targets_joint_av_outputs():
     assert cfg["train"]["audio_lr"] == 0.0005
     assert cfg["train"]["shared_lr"] == 0.00001
     assert cfg["train"]["visual_scale"] == 0.125
+    assert cfg["train"]["audio_window_seconds"] == 0.5
     assert cfg["losses"]["visual_weight"] == 1.0
     assert cfg["losses"]["audio_weight"] == 1.0
     assert cfg["losses"]["geometry_reg_weight"] == 0.001

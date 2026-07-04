@@ -18,6 +18,7 @@ train:
   audio_lr: 0.0005
   shared_lr: 0.00001
   visual_scale: 0.125
+  audio_window_seconds: 0.5
 
 losses:
   visual_weight: 1.0

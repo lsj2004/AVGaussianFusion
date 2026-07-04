@@ -36,7 +36,10 @@ Route A frozen-carrier training remains the baseline and keeps writing only unde
 `runs/scene1_opera_a`. Route B initializes shared Gaussians from the Route A
 FTGS++ checkpoint, runs audio-head warmup, then jointly fine-tunes selected
 shared Gaussian geometry/opacity/velocity parameters with geometry
-regularization. Outputs are written to `runs/scene1_opera_b_joint_av`.
+regularization. Joint fine-tuning aligns audio to the visual batch by cropping a
+short centered waveform window around each visual frame time, then renders audio
+and RGB from the same Gaussian state `t`. Outputs are written to
+`runs/scene1_opera_b_joint_av`.
 
 ```bash
 scripts/train_joint_scene1_opera.sh

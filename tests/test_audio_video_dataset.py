@@ -102,3 +102,32 @@ def test_audio_crop_dataset_rejects_channel_drift(tmp_path):
     dataset = AudioCropDataset(manifest_path, split="train")
     with pytest.raises(ValueError, match="channel mismatch"):
         dataset[0]
+
+
+def test_timed_audio_cropper_returns_centered_window_with_padding(tmp_path):
+    manifest_path = _write_manifest(tmp_path)
+    aligned = tmp_path / "audio" / "aligned_16k_stereo"
+    sample_rate = 16000
+    samples = np.arange(sample_rate, dtype=np.float32) / sample_rate * 0.25
+    stereo = np.stack([samples, samples + 1.0], axis=1)
+    sf.write(aligned / "near.wav", stereo, sample_rate)
+    sf.write(aligned / "cam00.wav", stereo + 0.25, sample_rate)
+
+    from avfusion.data.audio_video_dataset import TimedAudioCropper
+
+    cropper = TimedAudioCropper(manifest_path, crop_seconds=0.5, mode="center")
+    crop = cropper.get_crop("cam00", time_seconds=0.25)
+
+    assert crop["camera"] == "cam00"
+    assert crop["time"].item() == pytest.approx(0.25)
+    assert crop["start_sample"] == 0
+    assert crop["source_audio"].shape == (2, 8000)
+    assert crop["target_audio"].shape == (2, 8000)
+    assert crop["source_audio"][0, 0].item() == pytest.approx(0.0, abs=1e-4)
+    assert crop["target_audio"][0, 0].item() == pytest.approx(0.25, abs=1e-4)
+
+    edge_crop = cropper.get_crop("cam00", time_seconds=0.0)
+
+    assert edge_crop["start_sample"] == -4000
+    assert torch.all(edge_crop["source_audio"][:, :4000] == 0)
+    assert edge_crop["source_audio"][0, 4000].item() == pytest.approx(0.0, abs=1e-4)

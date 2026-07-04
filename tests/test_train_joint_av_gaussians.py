@@ -64,6 +64,7 @@ def test_config_file_populates_route_b_training_args(tmp_path):
                 "  top_k: 5",
                 "  audio_lr: 0.003",
                 "  shared_lr: 0.0004",
+                "  audio_window_seconds: 0.5",
             ]
         )
         + "\n"
@@ -81,6 +82,7 @@ def test_config_file_populates_route_b_training_args(tmp_path):
     assert cfg.top_k == 5
     assert cfg.audio_lr == pytest.approx(0.003)
     assert cfg.shared_lr == pytest.approx(0.0004)
+    assert cfg.audio_window_seconds == pytest.approx(0.5)
 
 
 def test_explicit_cli_args_override_config_file(tmp_path):
@@ -241,6 +243,14 @@ def test_train_joint_finetune_updates_shared_geometry_and_audio_head(tmp_path):
     train_audio_warmup(model=model, manifest_path=manifest, steps=1, lr=1e-3)
     means_before = model.shared_gaussians.means.detach().clone()
     audio_before = model.audio_head.mono_gain.detach().clone()
+    render_times = []
+    original_render_audio = model.render_audio
+
+    def spy_render_audio(t, source_audio):
+        render_times.append(float(t.detach().cpu().reshape(-1)[0]))
+        return original_render_audio(t, source_audio)
+
+    model.render_audio = spy_render_audio
 
     losses = train_joint_finetune(
         model=model,
@@ -252,11 +262,13 @@ def test_train_joint_finetune_updates_shared_geometry_and_audio_head(tmp_path):
         rgb_loss_weight=1.0,
         audio_loss_weight=1.0,
         visual_scale=0.5,
+        audio_window_seconds=0.5,
         frame_reader=lambda path, frame_idx: torch.ones(4, 4, 3),
     )
 
     assert len(losses) == 2
     assert all("total" in row and "rgb" in row and "audio" in row and "geo" in row for row in losses)
+    assert render_times[-2:] == pytest.approx([0.0, 1 / 30])
     assert not torch.equal(model.shared_gaussians.means.detach(), means_before)
     assert not torch.equal(model.audio_head.mono_gain.detach(), audio_before)
 

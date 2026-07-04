@@ -8,7 +8,8 @@ from pathlib import Path
 import torch
 
 from avfusion.audio import stft_magnitude_loss
-from avfusion.data.audio_video_dataset import AudioCropDataset
+from avfusion.data.audio_video_dataset import TimedAudioCropper
+from avfusion.data.visual_frame_dataset import FrameReader, VisualFrameDataset
 from avfusion.eval.audio_metrics import compute_audiogs_metrics
 from avfusion.eval.eval_audio import write_eval_summary
 from avfusion.train.train_joint_av_gaussians import build_model
@@ -28,23 +29,63 @@ def evaluate_joint_audio_checkpoint(
     manifest_path: str | Path,
     checkpoint_path: str | Path,
     output_dir: str | Path,
+    scale: float | None = None,
+    ftgspp_memmap: str | Path | None = None,
+    audio_window_seconds: float | None = None,
+    max_frames: int | None = None,
+    frame_reader: FrameReader | None = None,
 ) -> dict[str, float | str | dict]:
-    dataset = AudioCropDataset(manifest_path, split="eval")
-    if len(dataset) != 1:
-        raise ValueError(f"expected one eval camera, got {len(dataset)}")
-
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     if checkpoint.get("route") != "B_joint_av":
         raise ValueError(f"expected Route B joint checkpoint, got {checkpoint.get('route')!r}")
-    model = _restore_joint_model(checkpoint)
-    sample = dataset[0]
+    config = checkpoint.get("config") or {}
+    visual_scale = float(scale if scale is not None else config.get("visual_scale", 0.125))
+    memmap_root = ftgspp_memmap if ftgspp_memmap is not None else config.get("ftgspp_memmap")
+    window_seconds = float(
+        audio_window_seconds
+        if audio_window_seconds is not None
+        else config.get("audio_window_seconds", 0.5)
+    )
+    visual_dataset = VisualFrameDataset(
+        manifest_path,
+        split="eval",
+        scale=visual_scale,
+        memmap_root=memmap_root,
+        frame_reader=frame_reader,
+    )
+    if len(visual_dataset) == 0:
+        raise ValueError("visual eval split is empty")
+    audio_cropper = TimedAudioCropper(
+        manifest_path,
+        crop_seconds=window_seconds,
+        mode="center",
+    )
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = _restore_joint_model(checkpoint).to(device)
+    limit = len(visual_dataset) if max_frames is None else min(int(max_frames), len(visual_dataset))
+    if limit <= 0:
+        raise ValueError(f"max_frames must be positive when provided, got {max_frames}")
+    preds = []
+    targets = []
+    camera = None
 
     with torch.no_grad():
-        pred = model.render_audio(torch.tensor([[0.0]]), sample["source_audio"])
-        target = sample["target_audio"].to(pred)
+        for idx in range(limit):
+            visual_sample = visual_dataset[idx]
+            camera = str(visual_sample["camera"])
+            audio_sample = audio_cropper.get_crop(camera, visual_sample["time"])
+            render_time = visual_sample["time"].to(device)
+            pred_window = model.render_audio(
+                render_time,
+                audio_sample["source_audio"].to(device),
+            )
+            preds.append(pred_window.detach().cpu())
+            targets.append(audio_sample["target_audio"].to(pred_window).detach().cpu())
+        pred = torch.cat(preds, dim=-1)
+        target = torch.cat(targets, dim=-1)
         debug = write_eval_summary(
             Path(output_dir) / "audio_debug_summary.json",
-            camera=str(sample["camera"]),
+            camera=str(camera),
             pred=pred,
             target=target,
         )
@@ -54,12 +95,14 @@ def evaluate_joint_audio_checkpoint(
         summary = compute_audiogs_metrics(
             pred,
             target,
-            sample_rate=int(dataset.manifest.audio.sample_rate),
+            sample_rate=int(audio_cropper.manifest.audio.sample_rate),
             include_dpam=True,
         )
-        summary["camera"] = str(sample["camera"])
+        summary["camera"] = str(camera)
         summary["checkpoint"] = str(checkpoint_path)
         summary["stage"] = str(checkpoint.get("stage", "unknown"))
+        summary["num_windows"] = int(limit)
+        summary["audio_window_seconds"] = float(window_seconds)
         summary["debug"] = debug
 
     output_path = Path(output_dir) / "audio_summary.json"
@@ -73,12 +116,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--scale", type=float)
+    parser.add_argument("--ftgspp-memmap")
+    parser.add_argument("--audio-window-seconds", type=float)
+    parser.add_argument("--max-frames", type=int)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> None:
     args = build_arg_parser().parse_args(argv)
-    summary = evaluate_joint_audio_checkpoint(args.manifest, args.checkpoint, args.output_dir)
+    summary = evaluate_joint_audio_checkpoint(
+        args.manifest,
+        args.checkpoint,
+        args.output_dir,
+        scale=args.scale,
+        ftgspp_memmap=args.ftgspp_memmap,
+        audio_window_seconds=args.audio_window_seconds,
+        max_frames=args.max_frames,
+    )
     print(summary)
 
 

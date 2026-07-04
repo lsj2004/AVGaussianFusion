@@ -10,7 +10,7 @@ import torch
 import yaml
 
 from avfusion.audio import stft_magnitude_loss
-from avfusion.data.audio_video_dataset import AudioCropDataset
+from avfusion.data.audio_video_dataset import AudioCropDataset, TimedAudioCropper
 from avfusion.data.visual_frame_dataset import FrameReader, VisualFrameDataset
 from avfusion.joint.audio_head import JointAudioHead
 from avfusion.joint.ftgspp_bridge import FTGSRendererBridge
@@ -33,6 +33,7 @@ class TrainingConfig:
     rgb_loss_weight: float
     audio_loss_weight: float
     visual_scale: float
+    audio_window_seconds: float
     config: str | None = None
 
 
@@ -64,6 +65,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--top-k", type=_top_k)
     parser.add_argument("--audio-lr", type=float)
     parser.add_argument("--shared-lr", type=float)
+    parser.add_argument("--audio-window-seconds", type=float)
     return parser
 
 
@@ -132,6 +134,9 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
     rgb_loss_weight = _config_loss_value(config, "visual_weight", 1.0)
     audio_loss_weight = _config_loss_value(config, "audio_weight", 1.0)
     visual_scale = _config_train_value(config, "visual_scale", 0.125)
+    audio_window_seconds = args.audio_window_seconds
+    if audio_window_seconds is None:
+        audio_window_seconds = _config_train_value(config, "audio_window_seconds", 0.5)
 
     warmup_steps = int(_require_value(warmup_steps, "train.warmup_steps"))
     joint_steps = int(_require_value(joint_steps, "train.joint_steps"))
@@ -144,6 +149,9 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
     rgb_loss_weight = float(_require_value(rgb_loss_weight, "losses.visual_weight"))
     audio_loss_weight = float(_require_value(audio_loss_weight, "losses.audio_weight"))
     visual_scale = float(_require_value(visual_scale, "train.visual_scale"))
+    audio_window_seconds = float(
+        _require_value(audio_window_seconds, "train.audio_window_seconds")
+    )
     if warmup_steps < 0:
         raise ValueError(f"train.warmup_steps must be nonnegative, got {warmup_steps}")
     if joint_steps < 0:
@@ -160,6 +168,10 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
         raise ValueError(f"losses.audio_weight must be nonnegative, got {audio_loss_weight}")
     if visual_scale <= 0:
         raise ValueError(f"train.visual_scale must be positive, got {visual_scale}")
+    if audio_window_seconds <= 0:
+        raise ValueError(
+            f"train.audio_window_seconds must be positive, got {audio_window_seconds}"
+        )
 
     return TrainingConfig(
         manifest=str(_require_value(manifest, "paths.manifest")),
@@ -175,6 +187,7 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
         rgb_loss_weight=rgb_loss_weight,
         audio_loss_weight=audio_loss_weight,
         visual_scale=visual_scale,
+        audio_window_seconds=audio_window_seconds,
         config=args.config,
     )
 
@@ -264,6 +277,7 @@ def train_joint_finetune(
     rgb_loss_weight: float,
     audio_loss_weight: float,
     visual_scale: float,
+    audio_window_seconds: float = 0.5,
     ftgspp_memmap: str | Path | None = None,
     frame_reader: FrameReader | None = None,
 ) -> list[dict[str, float]]:
@@ -283,6 +297,11 @@ def train_joint_finetune(
         )
         if len(visual_dataset) == 0:
             raise ValueError("visual training split is empty")
+    timed_audio_cropper = TimedAudioCropper(
+        manifest_path,
+        crop_seconds=audio_window_seconds,
+        mode="center",
+    )
 
     model.unfreeze_shared_geometry()
     device = next(model.parameters()).device
@@ -290,18 +309,31 @@ def train_joint_finetune(
         model.parameter_groups(shared_lr=shared_lr, audio_lr=audio_lr)
     )
     loss_history: list[dict[str, float]] = []
-    render_time = torch.tensor([[0.0]], device=device)
 
     for step in range(steps):
-        sample = dataset[step % len(dataset)]
+        visual_sample = None
+        if visual_dataset is not None:
+            visual_sample = visual_dataset[step % len(visual_dataset)]
+            audio_sample = timed_audio_cropper.get_crop(
+                camera=str(visual_sample["camera"]),
+                time_seconds=visual_sample["time"],
+            )
+            render_time = visual_sample["time"].to(device)
+        else:
+            sample = dataset[step % len(dataset)]
+            audio_sample = {
+                "source_audio": sample["source_audio"],
+                "target_audio": sample["target_audio"],
+            }
+            render_time = torch.tensor([[0.0]], device=device)
         optimizer.zero_grad(set_to_none=True)
-        pred = model.render_audio(render_time, sample["source_audio"].to(device))
-        target = sample["target_audio"].to(pred)
+        pred = model.render_audio(render_time, audio_sample["source_audio"].to(device))
+        target = audio_sample["target_audio"].to(pred)
         audio_loss = stft_magnitude_loss(pred, target)
         rgb_loss = audio_loss.new_zeros(())
-        if visual_dataset is not None:
+        if visual_sample is not None:
             visual_sample = _move_tensor_values(
-                visual_dataset[step % len(visual_dataset)],
+                visual_sample,
                 device,
             )
             pred_rgb = model.render_rgb(visual_sample)
@@ -342,6 +374,7 @@ def train_and_save(
     rgb_loss_weight: float = 1.0,
     audio_loss_weight: float = 1.0,
     visual_scale: float = 0.125,
+    audio_window_seconds: float = 0.5,
     ftgspp_memmap: str | Path | None = None,
     config_path: str | Path | None = None,
     frame_reader: FrameReader | None = None,
@@ -365,6 +398,7 @@ def train_and_save(
         rgb_loss_weight=rgb_loss_weight,
         audio_loss_weight=audio_loss_weight,
         visual_scale=visual_scale,
+        audio_window_seconds=audio_window_seconds,
         ftgspp_memmap=ftgspp_memmap,
         frame_reader=frame_reader,
     )
@@ -392,6 +426,7 @@ def train_and_save(
         "rgb_loss_weight": float(rgb_loss_weight),
         "audio_loss_weight": float(audio_loss_weight),
         "visual_scale": float(visual_scale),
+        "audio_window_seconds": float(audio_window_seconds),
         "config": str(config_path) if config_path is not None else None,
         "implemented_stages": implemented_stages,
         "warmup_loss_history": warmup_loss_history,
@@ -439,6 +474,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         rgb_loss_weight=config.rgb_loss_weight,
         audio_loss_weight=config.audio_loss_weight,
         visual_scale=config.visual_scale,
+        audio_window_seconds=config.audio_window_seconds,
         ftgspp_memmap=config.ftgspp_memmap,
         config_path=config.config,
     )
