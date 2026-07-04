@@ -7,7 +7,7 @@ def _state(num_points=5):
     return {
         "xyz": torch.randn(num_points, 3, requires_grad=True),
         "opacity": torch.zeros(num_points, 1, requires_grad=True),
-        "velocity": torch.zeros(num_points, 3, requires_grad=True),
+        "velocity": torch.randn(num_points, 3, requires_grad=True),
     }
 
 
@@ -42,6 +42,8 @@ def test_joint_audio_head_backpropagates_to_audio_params_and_geometry():
     assert state["xyz"].grad.abs().sum() > 0
     assert state["opacity"].grad is not None
     assert state["opacity"].grad.abs().sum() > 0
+    assert state["velocity"].grad is not None
+    assert state["velocity"].grad.abs().sum() > 0
 
 
 def test_joint_audio_head_top_k_limits_points():
@@ -51,10 +53,19 @@ def test_joint_audio_head_top_k_limits_points():
 
 
 def test_joint_audio_head_rejects_invalid_top_k():
-    for top_k in (0, -1):
+    for top_k in (1, 0, -1):
         try:
             JointAudioHead(num_points=5, top_k=top_k)
         except ValueError as exc:
             assert "top_k" in str(exc)
         else:
             raise AssertionError(f"top_k={top_k} should raise ValueError")
+
+
+def test_joint_audio_head_requires_at_least_two_points_for_route_weighting():
+    try:
+        JointAudioHead(num_points=1)
+    except ValueError as exc:
+        assert "at least two points" in str(exc)
+    else:
+        raise AssertionError("num_points=1 should raise ValueError")
