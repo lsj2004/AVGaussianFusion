@@ -11,6 +11,11 @@ def _state(num_points=5):
     }
 
 
+def _assert_nonzero_grad(param):
+    assert param.grad is not None
+    assert param.grad.abs().sum() > 0
+
+
 def test_joint_audio_head_outputs_stereo_audio():
     head = JointAudioHead(num_points=5)
     source = torch.randn(2, 1024)
@@ -28,10 +33,11 @@ def test_joint_audio_head_backpropagates_to_audio_params_and_geometry():
     loss = head(state, source).pow(2).mean()
     loss.backward()
 
-    assert head.mono_gain.grad is not None
-    assert head.diff_gain.grad is not None
-    assert head.delay_offset.grad is not None
-    assert head.delay_offset.grad.abs().sum() > 0
+    _assert_nonzero_grad(head.audio_opacity)
+    _assert_nonzero_grad(head.mono_gain)
+    _assert_nonzero_grad(head.diff_gain)
+    _assert_nonzero_grad(head.delay_offset)
+    _assert_nonzero_grad(head.attenuation_logit)
     assert state["xyz"].grad is not None
     assert state["xyz"].grad.abs().sum() > 0
     assert state["opacity"].grad is not None
