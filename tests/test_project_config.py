@@ -71,6 +71,7 @@ def test_scene1_route_b_scripts_document_train_and_eval_entrypoints():
     assert "uv run --no-sync" in eval_script
     assert "--with torch" not in eval_script
     assert "python -m avfusion.eval.eval_joint_audio" in eval_script
+    assert "python -m avfusion.eval.eval_joint_visual" in eval_script
 
 
 def test_readme_labels_route_b_eval_as_metric_entrypoint():

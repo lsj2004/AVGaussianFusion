@@ -45,7 +45,7 @@ scripts/eval_joint_scene1_opera.sh
 
 `scripts/eval_joint_scene1_opera.sh` reports AudioGS-style heldout audio metrics
 for the Route B checkpoint, including `MAG`, `ENV`, `LRE`, `RTE`, and optional
-`DPAM`.
+`DPAM`, and writes heldout visual reconstruction metrics including `PSNR`.
 
 Route B config:
 
