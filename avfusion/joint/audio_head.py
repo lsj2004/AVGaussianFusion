@@ -9,11 +9,14 @@ class JointAudioHead(nn.Module):
         super().__init__()
         if num_points <= 0:
             raise ValueError(f"num_points must be positive, got {num_points}")
+        if top_k is not None and top_k <= 0:
+            raise ValueError(f"top_k must be positive, got {top_k}")
         self.num_points = int(num_points)
         self.top_k = min(int(top_k), num_points) if top_k is not None else num_points
+        gain_init = torch.linspace(1e-3, 2e-3, num_points).reshape(num_points, 1)
         self.audio_opacity = nn.Parameter(torch.zeros(num_points, 1))
-        self.mono_gain = nn.Parameter(torch.zeros(num_points, 1))
-        self.diff_gain = nn.Parameter(torch.zeros(num_points, 1))
+        self.mono_gain = nn.Parameter(gain_init.clone())
+        self.diff_gain = nn.Parameter(gain_init.clone())
         self.delay_offset = nn.Parameter(torch.zeros(num_points, 1))
         self.attenuation_logit = nn.Parameter(torch.zeros(num_points, 1))
 
@@ -33,7 +36,8 @@ class JointAudioHead(nn.Module):
         selected_xyz = xyz.index_select(0, indices)
         distance = selected_xyz.norm(dim=-1, keepdim=True).clamp_min(1e-4)
         attenuation = torch.sigmoid(self.attenuation_logit.index_select(0, indices)) / distance
-        weights = weights * attenuation
+        delay_weight = torch.sigmoid(self.delay_offset.index_select(0, indices))
+        weights = weights * attenuation * delay_weight
         weights = weights / weights.sum().clamp_min(1e-6)
         mono = torch.tanh((weights * self.mono_gain.index_select(0, indices)).sum())
         diff = torch.tanh((weights * self.diff_gain.index_select(0, indices)).sum())

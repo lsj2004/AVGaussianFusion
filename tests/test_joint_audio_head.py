@@ -30,11 +30,25 @@ def test_joint_audio_head_backpropagates_to_audio_params_and_geometry():
 
     assert head.mono_gain.grad is not None
     assert head.diff_gain.grad is not None
+    assert head.delay_offset.grad is not None
+    assert head.delay_offset.grad.abs().sum() > 0
     assert state["xyz"].grad is not None
+    assert state["xyz"].grad.abs().sum() > 0
     assert state["opacity"].grad is not None
+    assert state["opacity"].grad.abs().sum() > 0
 
 
 def test_joint_audio_head_top_k_limits_points():
     head = JointAudioHead(num_points=5, top_k=3)
 
     assert head.active_count == 3
+
+
+def test_joint_audio_head_rejects_invalid_top_k():
+    for top_k in (0, -1):
+        try:
+            JointAudioHead(num_points=5, top_k=top_k)
+        except ValueError as exc:
+            assert "top_k" in str(exc)
+        else:
+            raise AssertionError(f"top_k={top_k} should raise ValueError")
