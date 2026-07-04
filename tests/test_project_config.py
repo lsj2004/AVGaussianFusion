@@ -37,7 +37,7 @@ def test_scene1_route_b_config_targets_joint_av_outputs():
     assert cfg["paths"]["audio_root"] == "/mnt/sda/lisujing/Dataset/Sampled_data/v5_0630_audiogs_audio/scene1_opera"
     assert cfg["paths"]["manifest"] == "/mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene1_opera_a/scene_manifest.json"
     assert cfg["paths"]["ftgspp_checkpoint"] == "/mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene1_opera_a/ftgspp/scene1_opera/00/gaussians.pt"
-    assert cfg["paths"]["output_checkpoint"] == "/mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene1_opera_b_joint_av/joint_audio_warmup.pt"
+    assert cfg["paths"]["output_checkpoint"] == "/mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene1_opera_b_joint_av/joint_finetune.pt"
     assert cfg["train"]["warmup_steps"] == 1000
     assert cfg["train"]["joint_steps"] == 1000
     assert cfg["train"]["top_k"] == 8192
@@ -60,7 +60,7 @@ def test_scene1_route_b_scripts_document_train_and_eval_entrypoints():
 
     assert "set -euo pipefail" in eval_script
     assert "runs/scene1_opera_b_joint_av/eval" in eval_script
-    assert "joint_audio_warmup.pt" in eval_script
+    assert "joint_finetune.pt" in eval_script
     assert "FTGSPP_ROOT=\"/mnt/sda/lisujing/Dataset/FreeTimeGSPlusPlus\"" in eval_script
     assert "PYTHONPATH=\"${ROOT}:${FTGSPP_ROOT}:${PYTHONPATH:-}\"" in eval_script
     assert "uv run --no-sync" in eval_script

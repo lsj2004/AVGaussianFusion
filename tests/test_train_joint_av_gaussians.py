@@ -8,6 +8,7 @@ from avfusion.train.train_joint_av_gaussians import (
     save_joint_checkpoint,
     train_audio_warmup,
     train_and_save,
+    train_joint_finetune,
 )
 from tests.test_audio_video_dataset import _write_manifest
 from tests.test_joint_ftgspp_bridge import FakeGaussians
@@ -219,6 +220,68 @@ def test_train_and_save_writes_audio_warmup_checkpoint(monkeypatch, tmp_path):
     assert summary["steps"] == 2
     assert checkpoint["stage"] == "audio_warmup"
     assert len(checkpoint["loss_history"]) == 2
+
+
+def test_train_joint_finetune_updates_shared_geometry_and_audio_head(tmp_path):
+    manifest = _write_manifest(tmp_path)
+    model = build_model_from_fake(top_k=4)
+    with torch.no_grad():
+        model.shared_gaussians.means.add_(torch.linspace(0.1, 0.4, 4).reshape(4, 1))
+    train_audio_warmup(model=model, manifest_path=manifest, steps=1, lr=1e-3)
+    means_before = model.shared_gaussians.means.detach().clone()
+    audio_before = model.audio_head.mono_gain.detach().clone()
+
+    losses = train_joint_finetune(
+        model=model,
+        manifest_path=manifest,
+        steps=2,
+        shared_lr=1e-3,
+        audio_lr=1e-3,
+        geometry_reg_weight=0.001,
+    )
+
+    assert len(losses) == 2
+    assert all("total" in row and "audio" in row and "geo" in row for row in losses)
+    assert not torch.equal(model.shared_gaussians.means.detach(), means_before)
+    assert not torch.equal(model.audio_head.mono_gain.detach(), audio_before)
+
+
+def test_train_and_save_writes_joint_finetune_checkpoint(monkeypatch, tmp_path):
+    manifest = _write_manifest(tmp_path)
+    checkpoint_path = tmp_path / "ftgs.pt"
+    output_path = tmp_path / "joint_trained.pt"
+
+    def fake_load_checkpoint(path):
+        assert path == checkpoint_path
+        from avfusion.joint.ftgspp_bridge import FTGSRendererBridge
+
+        return FTGSRendererBridge(FakeGaussians())
+
+    monkeypatch.setattr(
+        "avfusion.train.train_joint_av_gaussians.FTGSRendererBridge.load_checkpoint",
+        fake_load_checkpoint,
+    )
+
+    summary = train_and_save(
+        manifest_path=manifest,
+        ftgspp_checkpoint=checkpoint_path,
+        output_path=output_path,
+        warmup_steps=1,
+        joint_steps=2,
+        top_k=4,
+        audio_lr=1e-3,
+        shared_lr=1e-3,
+        geometry_reg_weight=0.001,
+        config_path=None,
+    )
+
+    checkpoint = torch.load(output_path, map_location="cpu", weights_only=False)
+    assert summary["stage"] == "joint_finetune"
+    assert summary["steps"] == 3
+    assert summary["joint_steps"] == 2
+    assert checkpoint["stage"] == "joint_finetune"
+    assert len(checkpoint["loss_history"]) == 3
+    assert checkpoint["config"]["implemented_stages"] == ["audio_warmup", "joint_finetune"]
 
 
 def test_build_model_clamps_top_k_to_available_gaussians(monkeypatch, tmp_path):

@@ -30,12 +30,13 @@ configs/scene1_opera_a_frozen_carrier.yaml
 configs/ftgspp_scene1_opera/scene1_opera.toml
 ```
 
-## Route B Joint AV Audio Warmup
+## Route B Joint AV Fine-Tuning
 
 Route A frozen-carrier training remains the baseline and keeps writing only under
 `runs/scene1_opera_a`. Route B initializes shared Gaussians from the Route A
-FTGS++ checkpoint, optimizes the geometry-aware joint audio head, and writes to
-`runs/scene1_opera_b_joint_av`.
+FTGS++ checkpoint, runs audio-head warmup, then jointly fine-tunes selected
+shared Gaussian geometry/opacity/velocity parameters with geometry
+regularization. Outputs are written to `runs/scene1_opera_b_joint_av`.
 
 ```bash
 scripts/train_joint_scene1_opera.sh

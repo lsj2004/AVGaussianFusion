@@ -6,7 +6,7 @@ ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd)"
 FTGSPP_ROOT="/mnt/sda/lisujing/Dataset/FreeTimeGSPlusPlus"
 RUN_DIR="${ROOT}/runs/scene1_opera_b_joint_av"
 MANIFEST="${ROOT}/runs/scene1_opera_a/scene_manifest.json"
-CHECKPOINT="${RUN_DIR}/joint_audio_warmup.pt"
+CHECKPOINT="${RUN_DIR}/joint_finetune.pt"
 EVAL_DIR="${ROOT}/runs/scene1_opera_b_joint_av/eval"
 
 cd "${FTGSPP_ROOT}"

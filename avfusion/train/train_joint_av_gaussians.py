@@ -13,6 +13,7 @@ from avfusion.audio import stft_magnitude_loss
 from avfusion.data.audio_video_dataset import AudioCropDataset
 from avfusion.joint.audio_head import JointAudioHead
 from avfusion.joint.ftgspp_bridge import FTGSRendererBridge
+from avfusion.joint.losses import geometry_regularization
 from avfusion.joint.model import JointAVGaussianModel
 
 
@@ -26,6 +27,7 @@ class TrainingConfig:
     top_k: int
     audio_lr: float
     shared_lr: float
+    geometry_reg_weight: float
     config: str | None = None
 
 
@@ -85,6 +87,13 @@ def _config_train_value(config: dict[str, Any], key: str, default: Any) -> Any:
     return train.get(key, default)
 
 
+def _config_loss_value(config: dict[str, Any], key: str, default: Any) -> Any:
+    losses = config.get("losses") or {}
+    if not isinstance(losses, dict):
+        raise ValueError("Route B config field losses must be a mapping")
+    return losses.get(key, default)
+
+
 def _require_value(value: Any, name: str) -> Any:
     if value is None:
         raise ValueError(f"missing required Route B setting: {name}")
@@ -112,18 +121,26 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
     shared_lr = args.shared_lr
     if shared_lr is None:
         shared_lr = _config_train_value(config, "shared_lr", 1e-5)
+    geometry_reg_weight = _config_loss_value(config, "geometry_reg_weight", 1e-3)
 
     warmup_steps = int(_require_value(warmup_steps, "train.warmup_steps"))
     joint_steps = int(_require_value(joint_steps, "train.joint_steps"))
     top_k = int(_require_value(top_k, "train.top_k"))
     audio_lr = float(_require_value(audio_lr, "train.audio_lr"))
     shared_lr = float(_require_value(shared_lr, "train.shared_lr"))
+    geometry_reg_weight = float(
+        _require_value(geometry_reg_weight, "losses.geometry_reg_weight")
+    )
     if warmup_steps < 0:
         raise ValueError(f"train.warmup_steps must be nonnegative, got {warmup_steps}")
     if joint_steps < 0:
         raise ValueError(f"train.joint_steps must be nonnegative, got {joint_steps}")
     if top_k < 2:
         raise ValueError(f"train.top_k must be at least 2, got {top_k}")
+    if geometry_reg_weight < 0:
+        raise ValueError(
+            f"losses.geometry_reg_weight must be nonnegative, got {geometry_reg_weight}"
+        )
 
     return TrainingConfig(
         manifest=str(_require_value(manifest, "paths.manifest")),
@@ -134,6 +151,7 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
         top_k=top_k,
         audio_lr=audio_lr,
         shared_lr=shared_lr,
+        geometry_reg_weight=geometry_reg_weight,
         config=args.config,
     )
 
@@ -156,7 +174,7 @@ def save_joint_checkpoint(
     ftgspp_checkpoint: str | Path,
     manifest_path: str | Path,
     config: dict[str, Any],
-    loss_history: list[float],
+    loss_history: list[float | dict[str, float]],
 ) -> None:
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -205,6 +223,48 @@ def train_audio_warmup(
     return loss_history
 
 
+def train_joint_finetune(
+    model: JointAVGaussianModel,
+    manifest_path: str | Path,
+    steps: int,
+    shared_lr: float,
+    audio_lr: float,
+    geometry_reg_weight: float,
+) -> list[dict[str, float]]:
+    if steps <= 0:
+        return []
+    dataset = AudioCropDataset(manifest_path, split="train")
+    if len(dataset) == 0:
+        raise ValueError("training split is empty")
+
+    model.unfreeze_shared_geometry()
+    optimizer = torch.optim.Adam(
+        model.parameter_groups(shared_lr=shared_lr, audio_lr=audio_lr)
+    )
+    loss_history: list[dict[str, float]] = []
+    render_time = torch.tensor([[0.0]])
+
+    for step in range(steps):
+        sample = dataset[step % len(dataset)]
+        optimizer.zero_grad(set_to_none=True)
+        pred = model.render_audio(render_time, sample["source_audio"])
+        target = sample["target_audio"].to(pred)
+        audio_loss = stft_magnitude_loss(pred, target)
+        geo_loss = geometry_regularization(model)
+        total = audio_loss + float(geometry_reg_weight) * geo_loss
+        total.backward()
+        optimizer.step()
+        loss_history.append(
+            {
+                "total": float(total.detach().cpu().item()),
+                "audio": float(audio_loss.detach().cpu().item()),
+                "geo": float(geo_loss.detach().cpu().item()),
+            }
+        )
+
+    return loss_history
+
+
 def train_and_save(
     manifest_path: str | Path,
     ftgspp_checkpoint: str | Path,
@@ -214,16 +274,34 @@ def train_and_save(
     top_k: int,
     audio_lr: float,
     shared_lr: float,
-    config_path: str | Path | None,
+    geometry_reg_weight: float = 1e-3,
+    config_path: str | Path | None = None,
 ) -> dict[str, float | int | str]:
     model = build_model(ftgspp_checkpoint, top_k=top_k)
-    loss_history = train_audio_warmup(
+    warmup_loss_history = train_audio_warmup(
         model=model,
         manifest_path=manifest_path,
         steps=warmup_steps,
         lr=audio_lr,
     )
-    stage = "audio_warmup" if warmup_steps > 0 else "initialized"
+    joint_loss_history = train_joint_finetune(
+        model=model,
+        manifest_path=manifest_path,
+        steps=joint_steps,
+        shared_lr=shared_lr,
+        audio_lr=audio_lr,
+        geometry_reg_weight=geometry_reg_weight,
+    )
+    implemented_stages = []
+    if warmup_steps > 0:
+        implemented_stages.append("audio_warmup")
+    if joint_steps > 0:
+        implemented_stages.append("joint_finetune")
+    stage = implemented_stages[-1] if implemented_stages else "initialized"
+    loss_history: list[float | dict[str, float]] = [
+        *warmup_loss_history,
+        *joint_loss_history,
+    ]
     config = {
         "manifest": str(manifest_path),
         "ftgspp_checkpoint": str(ftgspp_checkpoint),
@@ -233,8 +311,11 @@ def train_and_save(
         "top_k": int(top_k),
         "audio_lr": float(audio_lr),
         "shared_lr": float(shared_lr),
+        "geometry_reg_weight": float(geometry_reg_weight),
         "config": str(config_path) if config_path is not None else None,
-        "implemented_stages": ["audio_warmup"] if warmup_steps > 0 else [],
+        "implemented_stages": implemented_stages,
+        "warmup_loss_history": warmup_loss_history,
+        "joint_loss_history": joint_loss_history,
     }
     save_joint_checkpoint(
         output_path=output_path,
@@ -248,9 +329,16 @@ def train_and_save(
     return {
         "route": "B_joint_av",
         "stage": stage,
-        "steps": int(warmup_steps),
-        "joint_steps_requested": int(joint_steps),
-        "final_loss": loss_history[-1] if loss_history else 0.0,
+        "steps": int(warmup_steps + joint_steps),
+        "warmup_steps": int(warmup_steps),
+        "joint_steps": int(joint_steps),
+        "final_loss": (
+            joint_loss_history[-1]["total"]
+            if joint_loss_history
+            else warmup_loss_history[-1]
+            if warmup_loss_history
+            else 0.0
+        ),
         "output": str(output_path),
     }
 
@@ -267,6 +355,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         top_k=config.top_k,
         audio_lr=config.audio_lr,
         shared_lr=config.shared_lr,
+        geometry_reg_weight=config.geometry_reg_weight,
         config_path=config.config,
     )
     print({**summary, "config": asdict(config)})
