@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local experiment outputs and checkpoints.
+runs/
+
+# Local editor and OS files.
+.DS_Store
+.idea/
+.vscode/

@@ -1,3 +1,4 @@
+import sys
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -84,6 +85,33 @@ def test_export_checkpoint_uses_loaded_object_without_gaussians_key(tmp_path):
 
     assert output_path.exists()
     assert torch.allclose(carrier.means, gs.means.detach())
+
+
+def test_export_checkpoint_retries_with_tinycudann_stub_for_cpu_export(
+    tmp_path, monkeypatch
+):
+    output_path = tmp_path / "carrier.pt"
+    gs = _fake_gaussians()
+    calls = []
+
+    def fake_load(*args, **kwargs):
+        calls.append((args, kwargs))
+        if len(calls) == 1:
+            raise OSError(
+                "Unknown compute capability. Ensure PyTorch with CUDA support is installed."
+            )
+        return {"gaussians": gs}
+
+    monkeypatch.delitem(sys.modules, "tinycudann", raising=False)
+    monkeypatch.delitem(sys.modules, "tinycudann.modules", raising=False)
+    monkeypatch.setattr(torch, "load", fake_load)
+
+    carrier = export_checkpoint(tmp_path / "checkpoint.pt", output_path)
+
+    assert len(calls) == 2
+    assert output_path.exists()
+    assert torch.allclose(carrier.velocities, torch.ones(2, 3))
+    assert hasattr(sys.modules["tinycudann"], "Encoding")
 
 
 def test_export_script_runs_inside_ftgspp_environment():

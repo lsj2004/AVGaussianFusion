@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 import torch
@@ -69,8 +70,14 @@ def test_evaluate_audio_checkpoint_writes_heldout_metrics(tmp_path):
     summary = evaluate_audio_checkpoint(manifest, checkpoint_path, output_dir)
 
     assert summary["camera"] == "cam10"
-    assert "l1_waveform" in summary
-    assert "stft_magnitude" in summary
+    assert "MAG" in summary
+    assert "ENV" in summary
+    assert "LRE" in summary
+    assert "RTE" in summary
+    assert "DPAM" in summary
+    assert "debug" in summary
+    assert "l1_waveform" in summary["debug"]
+    assert "stft_magnitude" in summary["debug"]
     assert (output_dir / "audio_summary.json").exists()
 
 
@@ -105,3 +112,10 @@ def test_eval_main_writes_summary(tmp_path):
     )
 
     assert (output_dir / "audio_summary.json").exists()
+
+
+def test_eval_scene1_script_uses_avcloud_for_dpam():
+    script = Path("scripts/eval_scene1_opera.sh").read_text()
+
+    assert "conda run -n avcloud" in script
+    assert "python -m avfusion.eval.eval_audio" in script

@@ -10,6 +10,7 @@ import torch
 from avfusion.adapters.visual_to_acoustic import select_topk_acoustic_carrier
 from avfusion.audio import AcousticGaussianParameters, render_audio, stft_magnitude_loss
 from avfusion.data.audio_video_dataset import AudioCropDataset
+from avfusion.eval.audio_metrics import compute_audiogs_metrics
 from avfusion.visual.carrier import FrozenVisualCarrier
 
 
@@ -75,16 +76,24 @@ def evaluate_audio_checkpoint(
     with torch.no_grad():
         pred = render_audio(acoustic_carrier, params, sample["source_audio"])
         target = sample["target_audio"].to(pred)
-        summary = write_eval_summary(
-            Path(output_dir) / "audio_summary.json",
+        debug = write_eval_summary(
+            Path(output_dir) / "audio_debug_summary.json",
             camera=str(sample["camera"]),
             pred=pred,
             target=target,
         )
-        summary["stft_magnitude"] = float(
+        debug["stft_magnitude"] = float(
             stft_magnitude_loss(pred, target).detach().cpu().item()
         )
+        summary = compute_audiogs_metrics(
+            pred,
+            target,
+            sample_rate=int(dataset.manifest.audio.sample_rate),
+            include_dpam=True,
+        )
+        summary["camera"] = str(sample["camera"])
         summary["checkpoint"] = str(checkpoint_path)
+        summary["debug"] = debug
 
     output_path = Path(output_dir) / "audio_summary.json"
     output_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")

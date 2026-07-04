@@ -10,15 +10,15 @@ mkdir -p "${LOG_DIR}"
 
 cd "${ROOT}"
 
-echo "[1/5] prepare manifest"
+echo "[1/6] prepare manifest"
 scripts/prepare_scene1_opera.sh 2>&1 | tee "${LOG_DIR}/01_prepare.log"
 
 if [[ ! -d "/mnt/sda/lisujing/Dataset/FreeTimeGSPlusPlus/_flow/avgaussianfusion_scene1_opera_a/scene1_opera" ]]; then
-  echo "[2/5] precompute UFM temporal flow"
+  echo "[2/6] precompute UFM temporal flow"
   scripts/run_stage1_flow.sh 2>&1 | tee "${LOG_DIR}/02_stage1_flow.log"
 fi
 
-echo "[3/5] train and evaluate FreeTimeGS++ visual carrier"
+echo "[3/6] train and evaluate FreeTimeGS++ visual carrier"
 scripts/run_stage1_ftgspp.sh 2>&1 | tee "${LOG_DIR}/03_stage1_ftgspp.log"
 
 if [[ ! -f "${FTGS_CKPT}" ]]; then
@@ -26,10 +26,10 @@ if [[ ! -f "${FTGS_CKPT}" ]]; then
   exit 1
 fi
 
-echo "[4/5] export frozen visual carrier"
+echo "[4/6] export frozen visual carrier"
 scripts/export_stage1_carrier.sh "${FTGS_CKPT}" 2>&1 | tee "${LOG_DIR}/04_export_carrier.log"
 
-echo "[5/5] train AudioGS-style acoustic parameters"
+echo "[5/6] train AudioGS-style acoustic parameters"
 scripts/train_stage2_audio.sh 2>&1 | tee "${LOG_DIR}/05_stage2_audio.log"
 
 echo "[6/6] evaluate held-out audio reconstruction"

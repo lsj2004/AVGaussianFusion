@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import sys
+import types
 from pathlib import Path
 from typing import Any
 
@@ -34,10 +36,53 @@ def carrier_from_ftgspp_object(gs: Any) -> FrozenVisualCarrier:
     return FrozenVisualCarrier(**kwargs)
 
 
+def _is_tinycudann_compute_capability_error(error: OSError) -> bool:
+    return "Unknown compute capability" in str(error)
+
+
+def _install_tinycudann_unpickle_stub() -> None:
+    module = types.ModuleType("tinycudann")
+    modules = types.ModuleType("tinycudann.modules")
+
+    class _UnavailableTinyCudaNN:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            raise RuntimeError(
+                "tinycudann is unavailable in this CPU export environment"
+            )
+
+    def _unsupported(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("tinycudann is unavailable in this CPU export environment")
+
+    module.Encoding = _UnavailableTinyCudaNN
+    module.Network = _UnavailableTinyCudaNN
+    module.NetworkWithInputEncoding = _UnavailableTinyCudaNN
+    module.supports_jit_fusion = lambda: False
+    module.free_temporary_memory = _unsupported
+
+    modules.Encoding = module.Encoding
+    modules.Network = module.Network
+    modules.NetworkWithInputEncoding = module.NetworkWithInputEncoding
+    modules.supports_jit_fusion = module.supports_jit_fusion
+    modules.free_temporary_memory = module.free_temporary_memory
+
+    sys.modules["tinycudann"] = module
+    sys.modules["tinycudann.modules"] = modules
+
+
+def _load_checkpoint_for_cpu_export(checkpoint_path: str | Path) -> Any:
+    try:
+        return torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    except OSError as error:
+        if not _is_tinycudann_compute_capability_error(error):
+            raise
+        _install_tinycudann_unpickle_stub()
+        return torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+
+
 def export_checkpoint(
     checkpoint_path: str | Path, output_path: str | Path
 ) -> FrozenVisualCarrier:
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    checkpoint = _load_checkpoint_for_cpu_export(checkpoint_path)
     if isinstance(checkpoint, dict) and "gaussians" in checkpoint:
         gs = checkpoint["gaussians"]
     else:

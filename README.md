@@ -12,8 +12,9 @@ Or run each stage manually:
 
 ```bash
 scripts/prepare_scene1_opera.sh
+scripts/run_stage1_flow.sh
 scripts/run_stage1_ftgspp.sh
-scripts/export_stage1_carrier.sh /path/to/ftgspp_checkpoint.pt
+scripts/export_stage1_carrier.sh /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene1_opera_a/ftgspp/scene1_opera/00/gaussians.pt
 scripts/train_stage2_audio.sh
 scripts/eval_scene1_opera.sh
 ```
