@@ -25,7 +25,10 @@ class FTGSRendererBridge:
             raise FTGSDependencyError(
                 "Route B joint training requires the FTGS++ environment with ftgspp and gsplat importable."
             ) from error
-        gaussians = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        if isinstance(checkpoint, dict) and "gaussians" in checkpoint:
+            checkpoint = checkpoint["gaussians"]
+        gaussians = checkpoint
         return cls(gaussians)
 
     def to(self, device: torch.device | str) -> "FTGSRendererBridge":

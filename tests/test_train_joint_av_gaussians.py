@@ -96,6 +96,20 @@ def test_build_model_clamps_top_k_to_available_gaussians(monkeypatch, tmp_path):
     assert model.audio_head.active_count == 4
 
 
+def test_build_model_accepts_checkpoint_payload_with_gaussians_key(monkeypatch, tmp_path):
+    checkpoint_path = tmp_path / "ftgs_payload.pt"
+    torch.save({"gaussians": FakeGaussians()}, checkpoint_path)
+    monkeypatch.setattr(
+        "avfusion.joint.ftgspp_bridge.importlib.import_module",
+        lambda name: object(),
+    )
+
+    model = build_model(checkpoint_path, top_k=3)
+
+    assert model.shared_gaussians.means.shape[0] == 4
+    assert model.audio_head.active_count == 3
+
+
 def test_parser_rejects_impossible_step_counts_and_top_k():
     parser = build_arg_parser()
 
