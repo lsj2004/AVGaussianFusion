@@ -7,7 +7,7 @@ def _state(num_points=5):
     return {
         "xyz": torch.randn(num_points, 3, requires_grad=True),
         "opacity": torch.zeros(num_points, 1, requires_grad=True),
-        "velocity": torch.randn(num_points, 3, requires_grad=True),
+        "velocity": torch.zeros(num_points, 3, requires_grad=True),
     }
 
 
@@ -50,6 +50,19 @@ def test_joint_audio_head_top_k_limits_points():
     head = JointAudioHead(num_points=5, top_k=3)
 
     assert head.active_count == 3
+
+
+def test_joint_audio_head_keeps_output_finite_for_huge_velocity():
+    head = JointAudioHead(num_points=5)
+    state = _state()
+    velocity = torch.zeros(5, 3)
+    velocity[0] = torch.tensor([1e30, 1e30, 1e30])
+    state["velocity"] = velocity.requires_grad_()
+    source = torch.randn(2, 1024)
+
+    pred = head(state, source)
+
+    assert torch.isfinite(pred).all()
 
 
 def test_joint_audio_head_rejects_invalid_top_k():

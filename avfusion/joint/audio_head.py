@@ -41,7 +41,8 @@ class JointAudioHead(nn.Module):
         distance = selected_xyz.norm(dim=-1, keepdim=True).clamp_min(1e-4)
         attenuation = torch.sigmoid(self.attenuation_logit.index_select(0, indices)) / distance
         delay_weight = torch.sigmoid(self.delay_offset.index_select(0, indices))
-        velocity_factor = 1.0 + 0.01 * selected_velocity.norm(dim=-1, keepdim=True)
+        velocity_projection = selected_velocity.mean(dim=-1, keepdim=True)
+        velocity_factor = 1.0 + 0.01 * torch.tanh(velocity_projection)
         weights = weights * attenuation * delay_weight * velocity_factor
         weights = weights / weights.sum().clamp_min(1e-6)
         mono = torch.tanh((weights * self.mono_gain.index_select(0, indices)).sum())
