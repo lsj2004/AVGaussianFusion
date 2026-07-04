@@ -12,6 +12,9 @@ class JointAVGaussianModel(nn.Module):
         self.bridge = bridge
         self.shared_gaussians = bridge.gaussians
         self.audio_head = audio_head
+        self._shared_requires_grad_init = {
+            name: parameter.requires_grad for name, parameter in self.shared_gaussians.named_parameters()
+        }
         self.register_buffer("means_init", self.shared_gaussians.means.detach().clone())
         self.register_buffer("opacities_init", self.shared_gaussians.opacities.detach().clone())
 
@@ -33,4 +36,5 @@ class JointAVGaussianModel(nn.Module):
 
     def unfreeze_shared_geometry(self) -> None:
         for name, parameter in self.shared_gaussians.named_parameters():
-            parameter.requires_grad_(name in {"means", "opacities", "velocity_model"} or name.startswith("velocity_model."))
+            is_geometry_parameter = name in {"means", "opacities", "velocity_model"} or name.startswith("velocity_model.")
+            parameter.requires_grad_(is_geometry_parameter and self._shared_requires_grad_init.get(name, False))

@@ -11,8 +11,15 @@ class FakeGaussiansWithVelocityField(FakeGaussians):
     def __init__(self):
         super().__init__()
         del self.velocity_model
-        self.velocity_model = torch.nn.Linear(3, 3)
+        self.velocity_model = FakeVelocityField()
         self.unrelated = torch.nn.Parameter(torch.ones(1))
+
+
+class FakeVelocityField(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.weight = torch.nn.Parameter(torch.ones(3, 3))
+        self.bounds = torch.nn.Parameter(torch.zeros(2, 3), requires_grad=False)
 
 
 def test_joint_model_exposes_separate_parameter_groups():
@@ -60,14 +67,20 @@ def test_unfreeze_shared_geometry_includes_nested_velocity_field_parameters():
     gaussians = FakeGaussiansWithVelocityField()
     model = JointAVGaussianModel(FTGSRendererBridge(gaussians), JointAudioHead(4))
     nested_velocity_parameter = gaussians.velocity_model.weight
+    nested_bounds_parameter = gaussians.velocity_model.bounds
+
+    assert nested_velocity_parameter.requires_grad
+    assert not nested_bounds_parameter.requires_grad
 
     model.freeze_shared()
 
     assert not nested_velocity_parameter.requires_grad
+    assert not nested_bounds_parameter.requires_grad
 
     model.unfreeze_shared_geometry()
 
     assert gaussians.means.requires_grad
     assert gaussians.opacities.requires_grad
     assert nested_velocity_parameter.requires_grad
+    assert not nested_bounds_parameter.requires_grad
     assert not gaussians.unrelated.requires_grad
