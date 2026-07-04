@@ -33,4 +33,4 @@ class JointAVGaussianModel(nn.Module):
 
     def unfreeze_shared_geometry(self) -> None:
         for name, parameter in self.shared_gaussians.named_parameters():
-            parameter.requires_grad_(name in {"means", "opacities", "velocity_model"})
+            parameter.requires_grad_(name in {"means", "opacities", "velocity_model"} or name.startswith("velocity_model."))

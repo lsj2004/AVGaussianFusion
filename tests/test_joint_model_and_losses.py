@@ -7,6 +7,14 @@ from avfusion.joint.model import JointAVGaussianModel
 from tests.test_joint_ftgspp_bridge import FakeGaussians
 
 
+class FakeGaussiansWithVelocityField(FakeGaussians):
+    def __init__(self):
+        super().__init__()
+        del self.velocity_model
+        self.velocity_model = torch.nn.Linear(3, 3)
+        self.unrelated = torch.nn.Parameter(torch.ones(1))
+
+
 def test_joint_model_exposes_separate_parameter_groups():
     model = JointAVGaussianModel(FTGSRendererBridge(FakeGaussians()), JointAudioHead(4))
 
@@ -46,3 +54,20 @@ def test_joint_loss_combines_visual_audio_and_regularization():
     assert losses["total"] > 0
     assert losses["rgb_l1"] > 0
     assert losses["audio_l1"] > 0
+
+
+def test_unfreeze_shared_geometry_includes_nested_velocity_field_parameters():
+    gaussians = FakeGaussiansWithVelocityField()
+    model = JointAVGaussianModel(FTGSRendererBridge(gaussians), JointAudioHead(4))
+    nested_velocity_parameter = gaussians.velocity_model.weight
+
+    model.freeze_shared()
+
+    assert not nested_velocity_parameter.requires_grad
+
+    model.unfreeze_shared_geometry()
+
+    assert gaussians.means.requires_grad
+    assert gaussians.opacities.requires_grad
+    assert nested_velocity_parameter.requires_grad
+    assert not gaussians.unrelated.requires_grad
