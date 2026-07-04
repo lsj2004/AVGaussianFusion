@@ -42,6 +42,9 @@ scripts/train_joint_scene1_opera.sh
 scripts/eval_joint_scene1_opera.sh
 ```
 
+`scripts/eval_joint_scene1_opera.sh` is currently a smoke/status placeholder
+for the Route B checkpoint and does not report metrics yet.
+
 Route B config:
 
 ```bash

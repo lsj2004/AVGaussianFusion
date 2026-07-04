@@ -4,6 +4,7 @@ import torch
 from avfusion.train.train_joint_av_gaussians import (
     build_arg_parser,
     build_model,
+    resolve_training_config,
     save_joint_checkpoint,
 )
 from tests.test_joint_ftgspp_bridge import FakeGaussians
@@ -39,6 +40,95 @@ def test_parser_accepts_required_paths_and_numeric_values():
     assert args.top_k == 3
     assert args.audio_lr == pytest.approx(0.001)
     assert args.shared_lr == pytest.approx(0.0002)
+
+
+def test_config_file_populates_route_b_training_args(tmp_path):
+    config_path = tmp_path / "route_b.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "route: B_joint_av",
+                "scene: scene1_opera",
+                "paths:",
+                "  manifest: /data/scene_manifest.json",
+                "  ftgspp_checkpoint: /data/gaussians.pt",
+                "  output_checkpoint: /out/joint_initialized.pt",
+                "train:",
+                "  warmup_steps: 7",
+                "  joint_steps: 9",
+                "  top_k: 5",
+                "  audio_lr: 0.003",
+                "  shared_lr: 0.0004",
+            ]
+        )
+        + "\n"
+    )
+
+    args = build_arg_parser().parse_args(["--config", str(config_path)])
+    cfg = resolve_training_config(args)
+
+    assert cfg.manifest == "/data/scene_manifest.json"
+    assert cfg.ftgspp_checkpoint == "/data/gaussians.pt"
+    assert cfg.output == "/out/joint_initialized.pt"
+    assert cfg.warmup_steps == 7
+    assert cfg.joint_steps == 9
+    assert cfg.top_k == 5
+    assert cfg.audio_lr == pytest.approx(0.003)
+    assert cfg.shared_lr == pytest.approx(0.0004)
+
+
+def test_explicit_cli_args_override_config_file(tmp_path):
+    config_path = tmp_path / "route_b.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "paths:",
+                "  manifest: /config/manifest.json",
+                "  ftgspp_checkpoint: /config/gaussians.pt",
+                "  output_checkpoint: /config/joint.pt",
+                "train:",
+                "  warmup_steps: 1",
+                "  joint_steps: 2",
+                "  top_k: 3",
+                "  audio_lr: 0.001",
+                "  shared_lr: 0.0002",
+            ]
+        )
+        + "\n"
+    )
+
+    args = build_arg_parser().parse_args(
+        [
+            "--config",
+            str(config_path),
+            "--manifest",
+            "/cli/manifest.json",
+            "--ftgspp-checkpoint",
+            "/cli/gaussians.pt",
+            "--output",
+            "/cli/joint.pt",
+            "--joint-steps",
+            "11",
+        ]
+    )
+    cfg = resolve_training_config(args)
+
+    assert cfg.manifest == "/cli/manifest.json"
+    assert cfg.ftgspp_checkpoint == "/cli/gaussians.pt"
+    assert cfg.output == "/cli/joint.pt"
+    assert cfg.warmup_steps == 1
+    assert cfg.joint_steps == 11
+    assert cfg.top_k == 3
+
+
+def test_config_file_requires_paths_section(tmp_path):
+    config_path = tmp_path / "route_b.yaml"
+    config_path.write_text("train:\n  top_k: 4\n")
+
+    args = build_arg_parser().parse_args(["--config", str(config_path)])
+
+    with pytest.raises(ValueError, match="paths.manifest"):
+        resolve_training_config(args)
 
 
 def test_save_joint_checkpoint_writes_route_b_schema(tmp_path):

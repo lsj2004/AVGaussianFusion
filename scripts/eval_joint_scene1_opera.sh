@@ -17,9 +17,10 @@ if [[ ! -f "${CHECKPOINT}" ]]; then
   exit 1
 fi
 
-MESSAGE="Route B checkpoint schema is not yet compatible with avfusion.eval.eval_audio; add a Route B joint AV evaluator before reporting metrics."
+MESSAGE="Route B checkpoint schema is not yet compatible with avfusion.eval.eval_audio; this smoke/status placeholder writes no metrics. Add a Route B joint AV evaluator before reporting metrics."
 {
   printf '%s\n' "${MESSAGE}"
+  printf 'metrics=none\n'
   printf 'checkpoint=%s\n' "${CHECKPOINT}"
 } > "${STATUS_FILE}"
 

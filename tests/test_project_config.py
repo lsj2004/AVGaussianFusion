@@ -51,7 +51,10 @@ def test_scene1_route_b_scripts_document_train_and_smoke_eval_entrypoints():
 
     assert "set -euo pipefail" in train_script
     assert "python -m avfusion.train.train_joint_av_gaussians" in train_script
-    assert "--ftgspp-checkpoint" in train_script
+    assert "--config \"${CONFIG}\"" in train_script
+    assert "FTGSPP_ROOT=\"/mnt/sda/lisujing/Dataset/FreeTimeGSPlusPlus\"" in train_script
+    assert "PYTHONPATH=\"${ROOT}:${FTGSPP_ROOT}:${PYTHONPATH:-}\"" in train_script
+    assert "uv run --no-sync --with soundfile --with pyyaml python -m avfusion.train.train_joint_av_gaussians" in train_script
     assert "runs/scene1_opera_b_joint_av" in train_script
     assert "runs/scene1_opera_a/stage2_audio.pt" not in train_script
 
@@ -59,3 +62,12 @@ def test_scene1_route_b_scripts_document_train_and_smoke_eval_entrypoints():
     assert "runs/scene1_opera_b_joint_av/eval" in eval_script
     assert "joint_initialized.pt" in eval_script
     assert "Route B checkpoint schema is not yet compatible" in eval_script
+    assert "no metrics" in eval_script
+
+
+def test_readme_labels_route_b_eval_as_status_placeholder():
+    readme = Path("README.md").read_text()
+
+    assert "scripts/eval_joint_scene1_opera.sh" in readme
+    assert "smoke/status placeholder" in readme
+    assert "does not report metrics" in readme
