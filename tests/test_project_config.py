@@ -37,12 +37,17 @@ def test_scene1_route_b_config_targets_joint_av_outputs():
     assert cfg["paths"]["audio_root"] == "/mnt/sda/lisujing/Dataset/Sampled_data/v5_0630_audiogs_audio/scene1_opera"
     assert cfg["paths"]["manifest"] == "/mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene1_opera_a/scene_manifest.json"
     assert cfg["paths"]["ftgspp_checkpoint"] == "/mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene1_opera_a/ftgspp/scene1_opera/00/gaussians.pt"
+    assert cfg["paths"]["ftgspp_memmap"] == "/mnt/sda/lisujing/Dataset/FreeTimeGSPlusPlus/_memmap/avgaussianfusion_scene1_opera_a/scene1_opera"
     assert cfg["paths"]["output_checkpoint"] == "/mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene1_opera_b_joint_av/joint_finetune.pt"
     assert cfg["train"]["warmup_steps"] == 1000
     assert cfg["train"]["joint_steps"] == 1000
     assert cfg["train"]["top_k"] == 8192
     assert cfg["train"]["audio_lr"] == 0.0005
     assert cfg["train"]["shared_lr"] == 0.00001
+    assert cfg["train"]["visual_scale"] == 0.125
+    assert cfg["losses"]["visual_weight"] == 1.0
+    assert cfg["losses"]["audio_weight"] == 1.0
+    assert cfg["losses"]["geometry_reg_weight"] == 0.001
 
 
 def test_scene1_route_b_scripts_document_train_and_eval_entrypoints():

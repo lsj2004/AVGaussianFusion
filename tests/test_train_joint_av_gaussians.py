@@ -56,6 +56,7 @@ def test_config_file_populates_route_b_training_args(tmp_path):
                 "paths:",
                 "  manifest: /data/scene_manifest.json",
                 "  ftgspp_checkpoint: /data/gaussians.pt",
+                "  ftgspp_memmap: /data/memmap/scene1_opera",
                 "  output_checkpoint: /out/joint_initialized.pt",
                 "train:",
                 "  warmup_steps: 7",
@@ -73,6 +74,7 @@ def test_config_file_populates_route_b_training_args(tmp_path):
 
     assert cfg.manifest == "/data/scene_manifest.json"
     assert cfg.ftgspp_checkpoint == "/data/gaussians.pt"
+    assert cfg.ftgspp_memmap == "/data/memmap/scene1_opera"
     assert cfg.output == "/out/joint_initialized.pt"
     assert cfg.warmup_steps == 7
     assert cfg.joint_steps == 9
@@ -224,6 +226,15 @@ def test_train_and_save_writes_audio_warmup_checkpoint(monkeypatch, tmp_path):
 
 def test_train_joint_finetune_updates_shared_geometry_and_audio_head(tmp_path):
     manifest = _write_manifest(tmp_path)
+    visual_root = tmp_path / "visual"
+    import numpy as np
+
+    np.savez(
+        visual_root / "cameras.npz",
+        names=np.array(["cam00", "cam10"]),
+        intrinsics=np.stack([np.eye(3), np.eye(3)]),
+        w2c=np.stack([np.eye(4), np.eye(4)]),
+    )
     model = build_model_from_fake(top_k=4)
     with torch.no_grad():
         model.shared_gaussians.means.add_(torch.linspace(0.1, 0.4, 4).reshape(4, 1))
@@ -238,10 +249,14 @@ def test_train_joint_finetune_updates_shared_geometry_and_audio_head(tmp_path):
         shared_lr=1e-3,
         audio_lr=1e-3,
         geometry_reg_weight=0.001,
+        rgb_loss_weight=1.0,
+        audio_loss_weight=1.0,
+        visual_scale=0.5,
+        frame_reader=lambda path, frame_idx: torch.ones(4, 4, 3),
     )
 
     assert len(losses) == 2
-    assert all("total" in row and "audio" in row and "geo" in row for row in losses)
+    assert all("total" in row and "rgb" in row and "audio" in row and "geo" in row for row in losses)
     assert not torch.equal(model.shared_gaussians.means.detach(), means_before)
     assert not torch.equal(model.audio_head.mono_gain.detach(), audio_before)
 
@@ -272,6 +287,9 @@ def test_train_and_save_writes_joint_finetune_checkpoint(monkeypatch, tmp_path):
         audio_lr=1e-3,
         shared_lr=1e-3,
         geometry_reg_weight=0.001,
+        rgb_loss_weight=0.0,
+        audio_loss_weight=1.0,
+        visual_scale=0.5,
         config_path=None,
     )
 

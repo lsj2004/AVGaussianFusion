@@ -11,6 +11,7 @@ import yaml
 
 from avfusion.audio import stft_magnitude_loss
 from avfusion.data.audio_video_dataset import AudioCropDataset
+from avfusion.data.visual_frame_dataset import FrameReader, VisualFrameDataset
 from avfusion.joint.audio_head import JointAudioHead
 from avfusion.joint.ftgspp_bridge import FTGSRendererBridge
 from avfusion.joint.losses import geometry_regularization
@@ -21,6 +22,7 @@ from avfusion.joint.model import JointAVGaussianModel
 class TrainingConfig:
     manifest: str
     ftgspp_checkpoint: str
+    ftgspp_memmap: str | None
     output: str
     warmup_steps: int
     joint_steps: int
@@ -28,6 +30,9 @@ class TrainingConfig:
     audio_lr: float
     shared_lr: float
     geometry_reg_weight: float
+    rgb_loss_weight: float
+    audio_loss_weight: float
+    visual_scale: float
     config: str | None = None
 
 
@@ -52,6 +57,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config")
     parser.add_argument("--manifest")
     parser.add_argument("--ftgspp-checkpoint")
+    parser.add_argument("--ftgspp-memmap")
     parser.add_argument("--output")
     parser.add_argument("--warmup-steps", type=_nonnegative_int)
     parser.add_argument("--joint-steps", type=_nonnegative_int)
@@ -105,6 +111,7 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
 
     manifest = args.manifest or _config_path_value(config, "manifest")
     ftgspp_checkpoint = args.ftgspp_checkpoint or _config_path_value(config, "ftgspp_checkpoint")
+    ftgspp_memmap = args.ftgspp_memmap or _config_path_value(config, "ftgspp_memmap")
     output = args.output or _config_path_value(config, "output_checkpoint")
     warmup_steps = args.warmup_steps
     if warmup_steps is None:
@@ -122,6 +129,9 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
     if shared_lr is None:
         shared_lr = _config_train_value(config, "shared_lr", 1e-5)
     geometry_reg_weight = _config_loss_value(config, "geometry_reg_weight", 1e-3)
+    rgb_loss_weight = _config_loss_value(config, "visual_weight", 1.0)
+    audio_loss_weight = _config_loss_value(config, "audio_weight", 1.0)
+    visual_scale = _config_train_value(config, "visual_scale", 0.125)
 
     warmup_steps = int(_require_value(warmup_steps, "train.warmup_steps"))
     joint_steps = int(_require_value(joint_steps, "train.joint_steps"))
@@ -131,6 +141,9 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
     geometry_reg_weight = float(
         _require_value(geometry_reg_weight, "losses.geometry_reg_weight")
     )
+    rgb_loss_weight = float(_require_value(rgb_loss_weight, "losses.visual_weight"))
+    audio_loss_weight = float(_require_value(audio_loss_weight, "losses.audio_weight"))
+    visual_scale = float(_require_value(visual_scale, "train.visual_scale"))
     if warmup_steps < 0:
         raise ValueError(f"train.warmup_steps must be nonnegative, got {warmup_steps}")
     if joint_steps < 0:
@@ -141,10 +154,17 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
         raise ValueError(
             f"losses.geometry_reg_weight must be nonnegative, got {geometry_reg_weight}"
         )
+    if rgb_loss_weight < 0:
+        raise ValueError(f"losses.visual_weight must be nonnegative, got {rgb_loss_weight}")
+    if audio_loss_weight < 0:
+        raise ValueError(f"losses.audio_weight must be nonnegative, got {audio_loss_weight}")
+    if visual_scale <= 0:
+        raise ValueError(f"train.visual_scale must be positive, got {visual_scale}")
 
     return TrainingConfig(
         manifest=str(_require_value(manifest, "paths.manifest")),
         ftgspp_checkpoint=str(_require_value(ftgspp_checkpoint, "paths.ftgspp_checkpoint")),
+        ftgspp_memmap=str(ftgspp_memmap) if ftgspp_memmap is not None else None,
         output=str(_require_value(output, "paths.output_checkpoint")),
         warmup_steps=warmup_steps,
         joint_steps=joint_steps,
@@ -152,6 +172,9 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
         audio_lr=audio_lr,
         shared_lr=shared_lr,
         geometry_reg_weight=geometry_reg_weight,
+        rgb_loss_weight=rgb_loss_weight,
+        audio_loss_weight=audio_loss_weight,
+        visual_scale=visual_scale,
         config=args.config,
     )
 
@@ -165,6 +188,13 @@ def build_model(ftgspp_checkpoint: str | Path, top_k: int = 8192) -> JointAVGaus
     effective_top_k = min(int(top_k), num_points)
     audio_head = JointAudioHead(num_points=num_points, top_k=effective_top_k)
     return JointAVGaussianModel(bridge, audio_head)
+
+
+def _move_tensor_values(batch: dict, device: torch.device) -> dict:
+    return {
+        key: value.to(device) if isinstance(value, torch.Tensor) else value
+        for key, value in batch.items()
+    }
 
 
 def save_joint_checkpoint(
@@ -206,14 +236,15 @@ def train_audio_warmup(
         raise ValueError("training split is empty")
 
     model.freeze_shared()
+    device = next(model.parameters()).device
     optimizer = torch.optim.Adam(model.audio_head.parameters(), lr=lr)
     loss_history: list[float] = []
-    render_time = torch.tensor([[0.0]])
+    render_time = torch.tensor([[0.0]], device=device)
 
     for step in range(steps):
         sample = dataset[step % len(dataset)]
         optimizer.zero_grad(set_to_none=True)
-        pred = model.render_audio(render_time, sample["source_audio"])
+        pred = model.render_audio(render_time, sample["source_audio"].to(device))
         target = sample["target_audio"].to(pred)
         loss = stft_magnitude_loss(pred, target)
         loss.backward()
@@ -230,33 +261,66 @@ def train_joint_finetune(
     shared_lr: float,
     audio_lr: float,
     geometry_reg_weight: float,
+    rgb_loss_weight: float,
+    audio_loss_weight: float,
+    visual_scale: float,
+    ftgspp_memmap: str | Path | None = None,
+    frame_reader: FrameReader | None = None,
 ) -> list[dict[str, float]]:
     if steps <= 0:
         return []
     dataset = AudioCropDataset(manifest_path, split="train")
     if len(dataset) == 0:
         raise ValueError("training split is empty")
+    visual_dataset = None
+    if rgb_loss_weight > 0:
+        visual_dataset = VisualFrameDataset(
+            manifest_path,
+            split="train",
+            scale=visual_scale,
+            memmap_root=ftgspp_memmap,
+            frame_reader=frame_reader,
+        )
+        if len(visual_dataset) == 0:
+            raise ValueError("visual training split is empty")
 
     model.unfreeze_shared_geometry()
+    device = next(model.parameters()).device
     optimizer = torch.optim.Adam(
         model.parameter_groups(shared_lr=shared_lr, audio_lr=audio_lr)
     )
     loss_history: list[dict[str, float]] = []
-    render_time = torch.tensor([[0.0]])
+    render_time = torch.tensor([[0.0]], device=device)
 
     for step in range(steps):
         sample = dataset[step % len(dataset)]
         optimizer.zero_grad(set_to_none=True)
-        pred = model.render_audio(render_time, sample["source_audio"])
+        pred = model.render_audio(render_time, sample["source_audio"].to(device))
         target = sample["target_audio"].to(pred)
         audio_loss = stft_magnitude_loss(pred, target)
+        rgb_loss = audio_loss.new_zeros(())
+        if visual_dataset is not None:
+            visual_sample = _move_tensor_values(
+                visual_dataset[step % len(visual_dataset)],
+                device,
+            )
+            pred_rgb = model.render_rgb(visual_sample)
+            rgb_loss = torch.nn.functional.l1_loss(
+                pred_rgb,
+                visual_sample["target_rgb"].to(pred_rgb),
+            )
         geo_loss = geometry_regularization(model)
-        total = audio_loss + float(geometry_reg_weight) * geo_loss
+        total = (
+            float(rgb_loss_weight) * rgb_loss
+            + float(audio_loss_weight) * audio_loss
+            + float(geometry_reg_weight) * geo_loss
+        )
         total.backward()
         optimizer.step()
         loss_history.append(
             {
                 "total": float(total.detach().cpu().item()),
+                "rgb": float(rgb_loss.detach().cpu().item()),
                 "audio": float(audio_loss.detach().cpu().item()),
                 "geo": float(geo_loss.detach().cpu().item()),
             }
@@ -275,9 +339,16 @@ def train_and_save(
     audio_lr: float,
     shared_lr: float,
     geometry_reg_weight: float = 1e-3,
+    rgb_loss_weight: float = 1.0,
+    audio_loss_weight: float = 1.0,
+    visual_scale: float = 0.125,
+    ftgspp_memmap: str | Path | None = None,
     config_path: str | Path | None = None,
+    frame_reader: FrameReader | None = None,
 ) -> dict[str, float | int | str]:
     model = build_model(ftgspp_checkpoint, top_k=top_k)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
     warmup_loss_history = train_audio_warmup(
         model=model,
         manifest_path=manifest_path,
@@ -291,6 +362,11 @@ def train_and_save(
         shared_lr=shared_lr,
         audio_lr=audio_lr,
         geometry_reg_weight=geometry_reg_weight,
+        rgb_loss_weight=rgb_loss_weight,
+        audio_loss_weight=audio_loss_weight,
+        visual_scale=visual_scale,
+        ftgspp_memmap=ftgspp_memmap,
+        frame_reader=frame_reader,
     )
     implemented_stages = []
     if warmup_steps > 0:
@@ -305,6 +381,7 @@ def train_and_save(
     config = {
         "manifest": str(manifest_path),
         "ftgspp_checkpoint": str(ftgspp_checkpoint),
+        "ftgspp_memmap": str(ftgspp_memmap) if ftgspp_memmap is not None else None,
         "output": str(output_path),
         "warmup_steps": int(warmup_steps),
         "joint_steps": int(joint_steps),
@@ -312,6 +389,9 @@ def train_and_save(
         "audio_lr": float(audio_lr),
         "shared_lr": float(shared_lr),
         "geometry_reg_weight": float(geometry_reg_weight),
+        "rgb_loss_weight": float(rgb_loss_weight),
+        "audio_loss_weight": float(audio_loss_weight),
+        "visual_scale": float(visual_scale),
         "config": str(config_path) if config_path is not None else None,
         "implemented_stages": implemented_stages,
         "warmup_loss_history": warmup_loss_history,
@@ -356,6 +436,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         audio_lr=config.audio_lr,
         shared_lr=config.shared_lr,
         geometry_reg_weight=config.geometry_reg_weight,
+        rgb_loss_weight=config.rgb_loss_weight,
+        audio_loss_weight=config.audio_loss_weight,
+        visual_scale=config.visual_scale,
+        ftgspp_memmap=config.ftgspp_memmap,
         config_path=config.config,
     )
     print({**summary, "config": asdict(config)})
