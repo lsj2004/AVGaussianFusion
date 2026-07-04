@@ -29,3 +29,21 @@ Config:
 configs/scene1_opera_a_frozen_carrier.yaml
 configs/ftgspp_scene1_opera/scene1_opera.toml
 ```
+
+## Route B Joint AV Scaffold
+
+Route A frozen-carrier training remains the baseline and keeps writing only under
+`runs/scene1_opera_a`. Route B initializes a joint AV checkpoint from the Route A
+FTGS++ carrier checkpoint and writes to
+`runs/scene1_opera_b_joint_av`.
+
+```bash
+scripts/train_joint_scene1_opera.sh
+scripts/eval_joint_scene1_opera.sh
+```
+
+Route B config:
+
+```bash
+configs/scene1_opera_b_joint_av.yaml
+```
