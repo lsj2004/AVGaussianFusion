@@ -34,16 +34,27 @@ configs/ftgspp_scene1_opera/scene1_opera.toml
 
 Route A frozen-carrier training remains the baseline and keeps writing only under
 `runs/scene1_opera_a`. Route B initializes shared Gaussians from the Route A
-FTGS++ checkpoint, runs audio-head warmup, then jointly fine-tunes selected
-shared Gaussian geometry/opacity/velocity parameters with geometry
-regularization. Joint fine-tuning aligns audio to the visual batch by cropping a
-short centered waveform window around each visual frame time, then renders audio
-and RGB from the same Gaussian state `t`. Outputs are written to
-`runs/scene1_opera_b_joint_av`.
+FTGS++ checkpoint, then jointly fine-tunes selected shared Gaussian
+geometry/opacity/velocity parameters with geometry regularization. Joint
+fine-tuning aligns audio to the visual batch by cropping a short centered
+waveform window around each visual frame time, then renders audio and RGB from
+the same Gaussian state `t`.
+
+The default Route B keeps the staged schedule: audio-head warmup, then AV joint
+fine-tuning. Outputs are written to `runs/scene1_opera_b_joint_av`.
 
 ```bash
 scripts/train_joint_scene1_opera.sh
 scripts/eval_joint_scene1_opera.sh
+```
+
+The no-warmup Route B skips audio-only warmup and starts strict AV joint
+fine-tuning from step 0 after visual initialization. Outputs are written to
+`runs/scene1_opera_b_joint_av_no_warmup`.
+
+```bash
+scripts/train_joint_no_warmup_scene1_opera.sh
+scripts/eval_joint_no_warmup_scene1_opera.sh
 ```
 
 `scripts/eval_joint_scene1_opera.sh` reports AudioGS-style heldout audio metrics
@@ -54,4 +65,5 @@ Route B config:
 
 ```bash
 configs/scene1_opera_b_joint_av.yaml
+configs/scene1_opera_b_joint_av_no_warmup.yaml
 ```

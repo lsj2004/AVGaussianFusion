@@ -51,9 +51,29 @@ def test_scene1_route_b_config_targets_joint_av_outputs():
     assert cfg["losses"]["geometry_reg_weight"] == 0.001
 
 
+def test_scene1_route_b_no_warmup_config_targets_separate_outputs():
+    cfg_path = Path("configs/scene1_opera_b_joint_av_no_warmup.yaml")
+    assert cfg_path.exists()
+    cfg = yaml.safe_load(cfg_path.read_text())
+
+    assert cfg["route"] == "B_joint_av_no_warmup"
+    assert cfg["scene"] == "scene1_opera"
+    assert cfg["paths"]["manifest"] == "/mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene1_opera_a/scene_manifest.json"
+    assert cfg["paths"]["ftgspp_checkpoint"] == "/mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene1_opera_a/ftgspp/scene1_opera/00/gaussians.pt"
+    assert cfg["paths"]["ftgspp_memmap"] == "/mnt/sda/lisujing/Dataset/FreeTimeGSPlusPlus/_memmap/avgaussianfusion_scene1_opera_a/scene1_opera"
+    assert cfg["paths"]["output_dir"] == "/mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene1_opera_b_joint_av_no_warmup"
+    assert cfg["paths"]["output_checkpoint"] == "/mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene1_opera_b_joint_av_no_warmup/joint_finetune.pt"
+    assert cfg["train"]["warmup_steps"] == 0
+    assert cfg["train"]["joint_steps"] == 1000
+    assert cfg["losses"]["visual_weight"] == 1.0
+    assert cfg["losses"]["audio_weight"] == 1.0
+
+
 def test_scene1_route_b_scripts_document_train_and_eval_entrypoints():
     train_script = Path("scripts/train_joint_scene1_opera.sh").read_text()
     eval_script = Path("scripts/eval_joint_scene1_opera.sh").read_text()
+    train_no_warmup_script = Path("scripts/train_joint_no_warmup_scene1_opera.sh").read_text()
+    eval_no_warmup_script = Path("scripts/eval_joint_no_warmup_scene1_opera.sh").read_text()
 
     assert "set -euo pipefail" in train_script
     assert "python -m avfusion.train.train_joint_av_gaussians" in train_script
@@ -74,9 +94,17 @@ def test_scene1_route_b_scripts_document_train_and_eval_entrypoints():
     assert "python -m avfusion.eval.eval_joint_audio" in eval_script
     assert "python -m avfusion.eval.eval_joint_visual" in eval_script
 
+    assert "scene1_opera_b_joint_av_no_warmup.yaml" in train_no_warmup_script
+    assert "runs/scene1_opera_b_joint_av_no_warmup" in train_no_warmup_script
+    assert "python -m avfusion.train.train_joint_av_gaussians" in train_no_warmup_script
+    assert "runs/scene1_opera_b_joint_av_no_warmup" in eval_no_warmup_script
+    assert "python -m avfusion.eval.eval_joint_audio" in eval_no_warmup_script
+    assert "python -m avfusion.eval.eval_joint_visual" in eval_no_warmup_script
+
 
 def test_readme_labels_route_b_eval_as_metric_entrypoint():
     readme = Path("README.md").read_text()
 
     assert "scripts/eval_joint_scene1_opera.sh" in readme
+    assert "scripts/train_joint_no_warmup_scene1_opera.sh" in readme
     assert "AudioGS-style heldout audio metrics" in readme
