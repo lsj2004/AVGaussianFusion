@@ -14,6 +14,8 @@ from avfusion.eval.audio_metrics import compute_audiogs_metrics
 from avfusion.eval.eval_audio import write_eval_summary
 from avfusion.train.train_joint_av_gaussians import build_model
 
+DEFAULT_DPAM_MAX_WINDOWS = 16
+
 
 def _average_window_metrics(window_metrics: list[dict]) -> dict:
     if not window_metrics:
@@ -35,6 +37,41 @@ def _average_window_metrics(window_metrics: list[dict]) -> dict:
     return averaged
 
 
+def _select_dpam_window_indices(num_windows: int, dpam_max_windows: int | None) -> list[int]:
+    if num_windows <= 0:
+        raise ValueError("num_windows must be positive")
+    if dpam_max_windows is not None and dpam_max_windows <= 0:
+        raise ValueError(f"dpam_max_windows must be positive when provided, got {dpam_max_windows}")
+    limit = min(num_windows, dpam_max_windows or DEFAULT_DPAM_MAX_WINDOWS)
+    return list(range(limit))
+
+
+def _attach_sampled_dpam_metrics(
+    summary: dict,
+    dpam_window_metrics: list[dict],
+) -> None:
+    summary["dpam_num_windows"] = len(dpam_window_metrics)
+    summary["dpam_window_metrics"] = dpam_window_metrics
+    if not dpam_window_metrics:
+        summary["DPAM"] = None
+        summary["DPAM_available"] = False
+        summary["DPAM_error"] = "no windows selected"
+        return
+
+    values = [metrics.get("DPAM") for metrics in dpam_window_metrics]
+    numeric_values = [float(value) for value in values if isinstance(value, (int, float))]
+    summary["DPAM"] = (
+        sum(numeric_values) / len(numeric_values)
+        if numeric_values and len(numeric_values) == len(values)
+        else None
+    )
+    summary["DPAM_available"] = all(
+        bool(metrics.get("DPAM_available")) for metrics in dpam_window_metrics
+    )
+    errors = [metrics.get("DPAM_error") for metrics in dpam_window_metrics if metrics.get("DPAM_error")]
+    summary["DPAM_error"] = errors[0] if errors else None
+
+
 def _restore_joint_model(checkpoint: dict) -> torch.nn.Module:
     config = checkpoint.get("config") or {}
     top_k = int(config.get("top_k", 8192))
@@ -54,6 +91,8 @@ def evaluate_joint_audio_checkpoint(
     audio_window_seconds: float | None = None,
     max_frames: int | None = None,
     frame_reader: FrameReader | None = None,
+    include_dpam: bool = False,
+    dpam_max_windows: int | None = None,
 ) -> dict[str, float | str | dict]:
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     if checkpoint.get("route") != "B_joint_av":
@@ -133,6 +172,24 @@ def evaluate_joint_audio_checkpoint(
         summary["audio_window_seconds"] = float(window_seconds)
         summary["window_metrics"] = window_metrics
         summary["concatenated_overlapping_debug"] = debug
+        if include_dpam:
+            dpam_window_metrics = []
+            for window_idx in _select_dpam_window_indices(limit, dpam_max_windows):
+                metrics = compute_audiogs_metrics(
+                    preds[window_idx],
+                    targets[window_idx],
+                    sample_rate=int(audio_cropper.manifest.audio.sample_rate),
+                    include_dpam=True,
+                )
+                metrics["source_window_index"] = int(window_idx)
+                metrics["camera"] = window_metrics[window_idx]["camera"]
+                metrics["frame"] = window_metrics[window_idx]["frame"]
+                metrics["time"] = window_metrics[window_idx]["time"]
+                metrics["start_sample"] = window_metrics[window_idx]["start_sample"]
+                dpam_window_metrics.append(metrics)
+            _attach_sampled_dpam_metrics(summary, dpam_window_metrics)
+        else:
+            summary["dpam_num_windows"] = 0
 
     output_path = Path(output_dir) / "audio_summary.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -149,6 +206,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ftgspp-memmap")
     parser.add_argument("--audio-window-seconds", type=float)
     parser.add_argument("--max-frames", type=int)
+    parser.add_argument("--include-dpam", action="store_true")
+    parser.add_argument(
+        "--dpam-max-windows",
+        type=int,
+        default=DEFAULT_DPAM_MAX_WINDOWS,
+        help="Maximum sampled windows for DPAM when --include-dpam is set.",
+    )
     return parser
 
 
@@ -162,6 +226,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         ftgspp_memmap=args.ftgspp_memmap,
         audio_window_seconds=args.audio_window_seconds,
         max_frames=args.max_frames,
+        include_dpam=args.include_dpam,
+        dpam_max_windows=args.dpam_max_windows,
     )
     print(summary)
 

@@ -60,6 +60,9 @@ scripts/eval_joint_no_warmup_scene1_opera.sh
 `scripts/eval_joint_scene1_opera.sh` reports AudioGS-style heldout audio metrics
 for the Route B checkpoint, including `MAG`, `ENV`, `LRE`, `RTE`, and optional
 `DPAM`, and writes heldout visual reconstruction metrics including `PSNR`.
+For strict AV eval, `MAG`/`ENV`/`LRE` are averaged over aligned audio windows.
+`DPAM` is intentionally off by default; enable sampled-window DPAM with
+`python -m avfusion.eval.eval_joint_audio ... --include-dpam --dpam-max-windows 16`.
 
 Route B config:
 
