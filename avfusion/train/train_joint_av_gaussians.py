@@ -305,6 +305,7 @@ def train_joint_finetune(
         manifest_path,
         crop_seconds=audio_window_seconds,
         mode="center",
+        allow_padding=False,
     )
 
     model.unfreeze_shared_geometry()
@@ -313,15 +314,27 @@ def train_joint_finetune(
         model.parameter_groups(shared_lr=shared_lr, audio_lr=audio_lr)
     )
     loss_history: list[dict[str, float]] = []
+    visual_cursor = 0
 
     for step in range(steps):
         visual_sample = None
         if visual_dataset is not None:
-            visual_sample = visual_dataset[step % len(visual_dataset)]
-            audio_sample = timed_audio_cropper.get_crop(
-                camera=str(visual_sample["camera"]),
-                time_seconds=visual_sample["time"],
-            )
+            audio_sample = None
+            for _ in range(len(visual_dataset)):
+                candidate = visual_dataset[visual_cursor % len(visual_dataset)]
+                visual_cursor += 1
+                try:
+                    audio_sample = timed_audio_cropper.get_crop(
+                        camera=str(candidate["camera"]),
+                        time_seconds=candidate["time"],
+                    )
+                    visual_sample = candidate
+                    break
+                except ValueError as error:
+                    if "padding" not in str(error):
+                        raise
+            if visual_sample is None or audio_sample is None:
+                raise ValueError("no non-padding visual/audio-aligned training samples available")
             render_time = visual_sample["time"].to(device)
         else:
             sample = dataset[step % len(dataset)]

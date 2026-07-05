@@ -131,3 +131,23 @@ def test_timed_audio_cropper_returns_centered_window_with_padding(tmp_path):
     assert edge_crop["start_sample"] == -4000
     assert torch.all(edge_crop["source_audio"][:, :4000] == 0)
     assert edge_crop["source_audio"][0, 4000].item() == pytest.approx(0.0, abs=1e-4)
+
+
+def test_timed_audio_cropper_rejects_too_short_stft_window(tmp_path):
+    manifest_path = _write_manifest(tmp_path)
+
+    from avfusion.data.audio_video_dataset import TimedAudioCropper
+
+    with pytest.raises(ValueError, match="n_fft|512"):
+        TimedAudioCropper(manifest_path, crop_seconds=0.001)
+
+
+def test_timed_audio_cropper_can_reject_padding_windows(tmp_path):
+    manifest_path = _write_manifest(tmp_path)
+
+    from avfusion.data.audio_video_dataset import TimedAudioCropper
+
+    cropper = TimedAudioCropper(manifest_path, crop_seconds=0.5, allow_padding=False)
+
+    with pytest.raises(ValueError, match="padding"):
+        cropper.get_crop("cam00", time_seconds=0.0)

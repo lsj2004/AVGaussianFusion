@@ -107,7 +107,7 @@ def evaluate_joint_audio_checkpoint(
                 pred_window.detach().cpu(),
                 target_window.detach().cpu(),
                 sample_rate=int(audio_cropper.manifest.audio.sample_rate),
-                include_dpam=True,
+                include_dpam=False,
             )
             metrics["camera"] = str(camera)
             metrics["frame"] = int(visual_sample["frame"])
@@ -132,7 +132,7 @@ def evaluate_joint_audio_checkpoint(
         summary["num_windows"] = int(limit)
         summary["audio_window_seconds"] = float(window_seconds)
         summary["window_metrics"] = window_metrics
-        summary["debug"] = debug
+        summary["concatenated_overlapping_debug"] = debug
 
     output_path = Path(output_dir) / "audio_summary.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)

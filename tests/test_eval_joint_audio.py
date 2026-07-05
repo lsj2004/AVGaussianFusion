@@ -55,9 +55,11 @@ def test_evaluate_joint_audio_checkpoint_writes_audiogs_metrics(monkeypatch, tmp
 
     monkeypatch.setattr(JointAVGaussianModel, "render_audio", spy_render_audio)
     metric_lengths = []
+    include_dpam_flags = []
 
     def fake_metrics(pred, target, sample_rate, include_dpam=True):
         metric_lengths.append(pred.shape[-1])
+        include_dpam_flags.append(include_dpam)
         idx = len(metric_lengths)
         return {
             "MAG": float(idx),
@@ -87,6 +89,7 @@ def test_evaluate_joint_audio_checkpoint_writes_audiogs_metrics(monkeypatch, tmp
     assert summary["audio_window_seconds"] == 0.5
     assert render_times == pytest.approx([0.0, 1 / 30])
     assert metric_lengths == [8000, 8000]
+    assert include_dpam_flags == [False, False]
     assert summary["MAG"] == pytest.approx(1.5)
     assert summary["ENV"] == pytest.approx(3.5)
     assert summary["LRE"] == pytest.approx(5.5)
@@ -94,6 +97,7 @@ def test_evaluate_joint_audio_checkpoint_writes_audiogs_metrics(monkeypatch, tmp
     assert "DPAM" in summary
     assert "window_metrics" in summary
     assert len(summary["window_metrics"]) == 2
-    assert "debug" in summary
-    assert "l1_waveform" in summary["debug"]
+    assert "concatenated_overlapping_debug" in summary
+    assert "debug" not in summary
+    assert "l1_waveform" in summary["concatenated_overlapping_debug"]
     assert json.loads((output_dir / "audio_summary.json").read_text())["camera"] == "cam10"

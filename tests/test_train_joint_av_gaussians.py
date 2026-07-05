@@ -10,7 +10,7 @@ from avfusion.train.train_joint_av_gaussians import (
     train_and_save,
     train_joint_finetune,
 )
-from tests.test_audio_video_dataset import _write_manifest
+from tests.test_audio_video_dataset import _write_manifest, _write_wav
 from tests.test_joint_ftgspp_bridge import FakeGaussians
 
 
@@ -256,6 +256,9 @@ def test_train_and_save_writes_audio_warmup_checkpoint(monkeypatch, tmp_path):
 
 def test_train_joint_finetune_updates_shared_geometry_and_audio_head(tmp_path):
     manifest = _write_manifest(tmp_path)
+    aligned = tmp_path / "audio" / "aligned_16k_stereo"
+    _write_wav(aligned / "near.wav", frames=16000, value=0.5)
+    _write_wav(aligned / "cam00.wav", frames=16000, value=0.25)
     visual_root = tmp_path / "visual"
     import numpy as np
 
@@ -296,17 +299,39 @@ def test_train_joint_finetune_updates_shared_geometry_and_audio_head(tmp_path):
 
     assert len(losses) == 2
     assert all("total" in row and "rgb" in row and "audio" in row and "geo" in row for row in losses)
-    assert losses[1]["camera"] == "cam00"
-    assert losses[1]["frame"] == 1
-    assert losses[1]["time"] == pytest.approx(1 / 30)
-    assert losses[1]["start_sample"] == -3467
-    assert render_times[-2:] == pytest.approx([0.0, 1 / 30])
+    assert losses[0]["camera"] == "cam00"
+    assert losses[0]["frame"] == 8
+    assert losses[0]["time"] == pytest.approx(8 / 30)
+    assert losses[0]["start_sample"] == 267
+    assert losses[1]["frame"] == 9
+    assert render_times[-2:] == pytest.approx([8 / 30, 9 / 30])
     assert not torch.equal(model.shared_gaussians.means.detach(), means_before)
     assert not torch.equal(model.audio_head.mono_gain.detach(), audio_before)
 
 
+def test_train_joint_finetune_rejects_zero_visual_weight(tmp_path):
+    manifest = _write_manifest(tmp_path)
+    model = build_model_from_fake(top_k=4)
+
+    with pytest.raises(ValueError, match="rgb_loss_weight"):
+        train_joint_finetune(
+            model=model,
+            manifest_path=manifest,
+            steps=1,
+            shared_lr=1e-3,
+            audio_lr=1e-3,
+            geometry_reg_weight=0.001,
+            rgb_loss_weight=0.0,
+            audio_loss_weight=1.0,
+            visual_scale=0.5,
+        )
+
+
 def test_train_and_save_writes_joint_finetune_checkpoint(monkeypatch, tmp_path):
     manifest = _write_manifest(tmp_path)
+    aligned = tmp_path / "audio" / "aligned_16k_stereo"
+    _write_wav(aligned / "near.wav", frames=16000, value=0.5)
+    _write_wav(aligned / "cam00.wav", frames=16000, value=0.25)
     visual_root = tmp_path / "visual"
     import numpy as np
 

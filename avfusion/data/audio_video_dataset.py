@@ -111,6 +111,8 @@ class TimedAudioCropper:
         manifest_path: str | Path,
         crop_seconds: float,
         mode: str = "center",
+        allow_padding: bool = True,
+        min_samples: int = 512,
     ):
         self.manifest = SceneManifest.load(manifest_path)
         if mode != "center":
@@ -119,8 +121,14 @@ class TimedAudioCropper:
         self.crop_seconds = float(crop_seconds)
         if self.crop_seconds <= 0:
             raise ValueError(f"crop_seconds must be positive, got {self.crop_seconds}")
+        self.allow_padding = bool(allow_padding)
         self.sample_rate = int(self.manifest.audio.sample_rate)
         self.crop_samples = max(1, int(round(self.crop_seconds * self.sample_rate)))
+        if self.crop_samples < int(min_samples):
+            raise ValueError(
+                f"timed audio crop has {self.crop_samples} samples, shorter than "
+                f"n_fft/min_samples={int(min_samples)}"
+            )
         self._audio_cache: dict[str, torch.Tensor] = {}
 
     def get_crop(self, camera: str, time_seconds: float | torch.Tensor) -> dict[str, str | int | torch.Tensor]:
@@ -130,13 +138,25 @@ class TimedAudioCropper:
         t = float(torch.as_tensor(time_seconds).reshape(-1)[0].item())
         center_sample = int(round(t * self.sample_rate))
         start_sample = center_sample - self.crop_samples // 2
+        source_full = self._load_audio(self.manifest.audio.source_path)
+        target_full = self._load_audio(self.manifest.cameras[camera_name].audio_path)
+        end_sample = start_sample + self.crop_samples
+        if not self.allow_padding and (
+            start_sample < 0
+            or end_sample > int(source_full.shape[-1])
+            or end_sample > int(target_full.shape[-1])
+        ):
+            raise ValueError(
+                f"timed audio crop would require padding: start_sample={start_sample}, "
+                f"end_sample={end_sample}"
+            )
         source_audio = _crop_with_padding(
-            self._load_audio(self.manifest.audio.source_path),
+            source_full,
             start_sample,
             self.crop_samples,
         )
         target_audio = _crop_with_padding(
-            self._load_audio(self.manifest.cameras[camera_name].audio_path),
+            target_full,
             start_sample,
             self.crop_samples,
         )
