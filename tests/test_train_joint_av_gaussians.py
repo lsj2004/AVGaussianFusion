@@ -139,6 +139,34 @@ def test_config_file_requires_paths_section(tmp_path):
         resolve_training_config(args)
 
 
+def test_config_rejects_joint_training_without_visual_loss(tmp_path):
+    config_path = tmp_path / "route_b.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "paths:",
+                "  manifest: /data/scene_manifest.json",
+                "  ftgspp_checkpoint: /data/gaussians.pt",
+                "  output_checkpoint: /out/joint.pt",
+                "train:",
+                "  warmup_steps: 0",
+                "  joint_steps: 2",
+                "  top_k: 4",
+                "  audio_lr: 0.001",
+                "  shared_lr: 0.0002",
+                "losses:",
+                "  visual_weight: 0.0",
+            ]
+        )
+        + "\n"
+    )
+
+    args = build_arg_parser().parse_args(["--config", str(config_path)])
+
+    with pytest.raises(ValueError, match="visual_weight.*joint"):
+        resolve_training_config(args)
+
+
 def test_save_joint_checkpoint_writes_route_b_schema(tmp_path):
     model = build_model_from_fake(top_k=4)
     output = tmp_path / "nested" / "joint.pt"
@@ -268,6 +296,10 @@ def test_train_joint_finetune_updates_shared_geometry_and_audio_head(tmp_path):
 
     assert len(losses) == 2
     assert all("total" in row and "rgb" in row and "audio" in row and "geo" in row for row in losses)
+    assert losses[1]["camera"] == "cam00"
+    assert losses[1]["frame"] == 1
+    assert losses[1]["time"] == pytest.approx(1 / 30)
+    assert losses[1]["start_sample"] == -3467
     assert render_times[-2:] == pytest.approx([0.0, 1 / 30])
     assert not torch.equal(model.shared_gaussians.means.detach(), means_before)
     assert not torch.equal(model.audio_head.mono_gain.detach(), audio_before)
@@ -275,6 +307,15 @@ def test_train_joint_finetune_updates_shared_geometry_and_audio_head(tmp_path):
 
 def test_train_and_save_writes_joint_finetune_checkpoint(monkeypatch, tmp_path):
     manifest = _write_manifest(tmp_path)
+    visual_root = tmp_path / "visual"
+    import numpy as np
+
+    np.savez(
+        visual_root / "cameras.npz",
+        names=np.array(["cam00", "cam10"]),
+        intrinsics=np.stack([np.eye(3), np.eye(3)]),
+        w2c=np.stack([np.eye(4), np.eye(4)]),
+    )
     checkpoint_path = tmp_path / "ftgs.pt"
     output_path = tmp_path / "joint_trained.pt"
 
@@ -299,9 +340,11 @@ def test_train_and_save_writes_joint_finetune_checkpoint(monkeypatch, tmp_path):
         audio_lr=1e-3,
         shared_lr=1e-3,
         geometry_reg_weight=0.001,
-        rgb_loss_weight=0.0,
+        rgb_loss_weight=1.0,
         audio_loss_weight=1.0,
         visual_scale=0.5,
+        audio_window_seconds=0.5,
+        frame_reader=lambda path, frame_idx: torch.ones(4, 4, 3),
         config_path=None,
     )
 

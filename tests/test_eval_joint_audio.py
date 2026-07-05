@@ -54,6 +54,24 @@ def test_evaluate_joint_audio_checkpoint_writes_audiogs_metrics(monkeypatch, tmp
         return original_render_audio(self, t, source_audio)
 
     monkeypatch.setattr(JointAVGaussianModel, "render_audio", spy_render_audio)
+    metric_lengths = []
+
+    def fake_metrics(pred, target, sample_rate, include_dpam=True):
+        metric_lengths.append(pred.shape[-1])
+        idx = len(metric_lengths)
+        return {
+            "MAG": float(idx),
+            "ENV": float(idx + 2),
+            "LRE": float(idx + 4),
+            "RTE": None,
+            "RTE_available": False,
+            "RTE_error": "not configured",
+            "DPAM": None,
+            "DPAM_available": False,
+            "DPAM_error": "not configured",
+        }
+
+    monkeypatch.setattr("avfusion.eval.eval_joint_audio.compute_audiogs_metrics", fake_metrics)
 
     summary = evaluate_joint_audio_checkpoint(
         manifest_path=manifest,
@@ -68,11 +86,14 @@ def test_evaluate_joint_audio_checkpoint_writes_audiogs_metrics(monkeypatch, tmp
     assert summary["num_windows"] == 2
     assert summary["audio_window_seconds"] == 0.5
     assert render_times == pytest.approx([0.0, 1 / 30])
-    assert "MAG" in summary
-    assert "ENV" in summary
-    assert "LRE" in summary
+    assert metric_lengths == [8000, 8000]
+    assert summary["MAG"] == pytest.approx(1.5)
+    assert summary["ENV"] == pytest.approx(3.5)
+    assert summary["LRE"] == pytest.approx(5.5)
     assert "RTE" in summary
     assert "DPAM" in summary
+    assert "window_metrics" in summary
+    assert len(summary["window_metrics"]) == 2
     assert "debug" in summary
     assert "l1_waveform" in summary["debug"]
     assert json.loads((output_dir / "audio_summary.json").read_text())["camera"] == "cam10"

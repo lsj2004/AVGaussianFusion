@@ -164,6 +164,8 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
         )
     if rgb_loss_weight < 0:
         raise ValueError(f"losses.visual_weight must be nonnegative, got {rgb_loss_weight}")
+    if joint_steps > 0 and rgb_loss_weight <= 0:
+        raise ValueError("losses.visual_weight must be positive for joint AV training")
     if audio_loss_weight < 0:
         raise ValueError(f"losses.audio_weight must be nonnegative, got {audio_loss_weight}")
     if visual_scale <= 0:
@@ -283,6 +285,8 @@ def train_joint_finetune(
 ) -> list[dict[str, float]]:
     if steps <= 0:
         return []
+    if rgb_loss_weight <= 0:
+        raise ValueError("rgb_loss_weight must be positive for joint AV fine-tuning")
     dataset = AudioCropDataset(manifest_path, split="train")
     if len(dataset) == 0:
         raise ValueError("training split is empty")
@@ -355,6 +359,10 @@ def train_joint_finetune(
                 "rgb": float(rgb_loss.detach().cpu().item()),
                 "audio": float(audio_loss.detach().cpu().item()),
                 "geo": float(geo_loss.detach().cpu().item()),
+                "camera": str(visual_sample["camera"]) if visual_sample is not None else str(audio_sample.get("camera", "")),
+                "frame": int(visual_sample["frame"]) if visual_sample is not None else -1,
+                "time": float(render_time.detach().cpu().reshape(-1)[0].item()),
+                "start_sample": int(audio_sample.get("start_sample", -1)),
             }
         )
 

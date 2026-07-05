@@ -15,6 +15,26 @@ from avfusion.eval.eval_audio import write_eval_summary
 from avfusion.train.train_joint_av_gaussians import build_model
 
 
+def _average_window_metrics(window_metrics: list[dict]) -> dict:
+    if not window_metrics:
+        raise ValueError("window_metrics must be non-empty")
+    averaged: dict = {}
+    for key in ("MAG", "ENV", "LRE", "DPAM"):
+        values = [metrics.get(key) for metrics in window_metrics]
+        numeric_values = [float(value) for value in values if isinstance(value, (int, float))]
+        averaged[key] = (
+            sum(numeric_values) / len(numeric_values)
+            if numeric_values and len(numeric_values) == len(values)
+            else None
+        )
+    averaged["RTE"] = None
+    averaged["RTE_available"] = all(bool(metrics.get("RTE_available")) for metrics in window_metrics)
+    averaged["RTE_error"] = window_metrics[0].get("RTE_error")
+    averaged["DPAM_available"] = all(bool(metrics.get("DPAM_available")) for metrics in window_metrics)
+    averaged["DPAM_error"] = window_metrics[0].get("DPAM_error")
+    return averaged
+
+
 def _restore_joint_model(checkpoint: dict) -> torch.nn.Module:
     config = checkpoint.get("config") or {}
     top_k = int(config.get("top_k", 8192))
@@ -67,6 +87,7 @@ def evaluate_joint_audio_checkpoint(
         raise ValueError(f"max_frames must be positive when provided, got {max_frames}")
     preds = []
     targets = []
+    window_metrics = []
     camera = None
 
     with torch.no_grad():
@@ -80,7 +101,19 @@ def evaluate_joint_audio_checkpoint(
                 audio_sample["source_audio"].to(device),
             )
             preds.append(pred_window.detach().cpu())
-            targets.append(audio_sample["target_audio"].to(pred_window).detach().cpu())
+            target_window = audio_sample["target_audio"].to(pred_window)
+            targets.append(target_window.detach().cpu())
+            metrics = compute_audiogs_metrics(
+                pred_window.detach().cpu(),
+                target_window.detach().cpu(),
+                sample_rate=int(audio_cropper.manifest.audio.sample_rate),
+                include_dpam=True,
+            )
+            metrics["camera"] = str(camera)
+            metrics["frame"] = int(visual_sample["frame"])
+            metrics["time"] = float(visual_sample["time"].detach().cpu().reshape(-1)[0].item())
+            metrics["start_sample"] = int(audio_sample["start_sample"])
+            window_metrics.append(metrics)
         pred = torch.cat(preds, dim=-1)
         target = torch.cat(targets, dim=-1)
         debug = write_eval_summary(
@@ -92,17 +125,13 @@ def evaluate_joint_audio_checkpoint(
         debug["stft_magnitude"] = float(
             stft_magnitude_loss(pred, target).detach().cpu().item()
         )
-        summary = compute_audiogs_metrics(
-            pred,
-            target,
-            sample_rate=int(audio_cropper.manifest.audio.sample_rate),
-            include_dpam=True,
-        )
+        summary = _average_window_metrics(window_metrics)
         summary["camera"] = str(camera)
         summary["checkpoint"] = str(checkpoint_path)
         summary["stage"] = str(checkpoint.get("stage", "unknown"))
         summary["num_windows"] = int(limit)
         summary["audio_window_seconds"] = float(window_seconds)
+        summary["window_metrics"] = window_metrics
         summary["debug"] = debug
 
     output_path = Path(output_dir) / "audio_summary.json"
