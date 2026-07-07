@@ -236,3 +236,18 @@ def test_audiogs_strict_head_configs_use_audio_gs_protocol():
         script = (Path("scripts") / script_name).read_text()
         assert "--audio-window-seconds 3.0" in script
         assert "audiogs_head_strict" in script
+        assert "fair_baseline_comparison" not in script
+
+
+def test_audiogs_strict_all_scene_scripts_dispatch_both_datasets():
+    train_all = (Path("scripts") / "train_joint_audiogs_head_strict_all.sh").read_text()
+    eval_all = (Path("scripts") / "eval_joint_audiogs_head_strict_all.sh").read_text()
+    run_all = (Path("scripts") / "run_joint_audiogs_head_strict_all.sh").read_text()
+
+    for text in [train_all, eval_all]:
+        assert "scene1_opera" in text
+        assert "scene7_playing_300" in text
+        assert "SCENES=" in text
+
+    assert "MODE=" in run_all
+    assert "train_eval" in run_all

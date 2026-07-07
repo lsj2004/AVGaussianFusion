@@ -11,16 +11,6 @@ FTGSPP_CHECKPOINT="${ROOT}/runs/scene7_playing_300_a/ftgspp/Scene7playing/00/gau
 
 mkdir -p "${RUN_DIR}"
 
-valid_joint_steps() {
-  cd "${FTGSPP_ROOT}"
-  PYTHONPATH="${ROOT}:${FTGSPP_ROOT}:${PYTHONPATH:-}" \
-  UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/avgaussianfusion-uv-cache}" \
-  uv run --no-sync --with soundfile --with scipy python -m avfusion.eval.fair_baseline_comparison \
-    --print-valid-joint-steps \
-    --manifest "${MANIFEST}" \
-    --audio-window-seconds 3.0
-}
-
 if [[ ! -f "${CONFIG}" ]]; then
   echo "missing AudioGS-head config: ${CONFIG}" >&2
   exit 1
@@ -36,13 +26,18 @@ if [[ ! -f "${FTGSPP_CHECKPOINT}" ]]; then
   exit 1
 fi
 
-JOINT_STEPS="$(valid_joint_steps)"
-echo "AudioGS-like head Route B scene7_playing_300 joint_steps=${JOINT_STEPS}"
+EXTRA_ARGS=()
+if [[ -n "${JOINT_STEPS_OVERRIDE:-}" ]]; then
+  EXTRA_ARGS+=(--joint-steps "${JOINT_STEPS_OVERRIDE}")
+  echo "AudioGS visual-carrier Route B scene7_playing_300 joint_steps=${JOINT_STEPS_OVERRIDE} (override)"
+else
+  echo "AudioGS visual-carrier Route B scene7_playing_300 using config joint_steps"
+fi
 
 cd "${FTGSPP_ROOT}"
 PYTHONPATH="${ROOT}:${FTGSPP_ROOT}:${PYTHONPATH:-}" \
 UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/avgaussianfusion-uv-cache}" \
 uv run --no-sync --with soundfile --with pyyaml --with scipy python -m avfusion.train.train_joint_av_gaussians \
   --config "${CONFIG}" \
-  --joint-steps "${JOINT_STEPS}" \
-  --audio-window-seconds 3.0
+  --audio-window-seconds 3.0 \
+  "${EXTRA_ARGS[@]}"
