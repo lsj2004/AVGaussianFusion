@@ -251,3 +251,33 @@ def test_audiogs_strict_all_scene_scripts_dispatch_both_datasets():
 
     assert "MODE=" in run_all
     assert "train_eval" in run_all
+
+
+def test_audiogs_camera_frame_configs_and_scripts_are_isolated():
+    expected = {
+        "scene1_opera_b_joint_av_audiogs_head_camera_frame.yaml": (
+            "scene1_opera_b_joint_av_audiogs_head_camera_frame",
+            "train_joint_audiogs_head_camera_frame_scene1_opera.sh",
+        ),
+        "scene7_playing_300_b_joint_av_audiogs_head_camera_frame.yaml": (
+            "scene7_playing_300_b_joint_av_audiogs_head_camera_frame",
+            "train_joint_audiogs_head_camera_frame_scene7_playing_300.sh",
+        ),
+    }
+    for filename, (run_name, script_name) in expected.items():
+        cfg = yaml.safe_load((Path("configs") / filename).read_text())
+        assert cfg["route"] == "B_joint_av_audiogs_head_camera_frame"
+        assert cfg["paths"]["output_dir"].endswith(f"/runs/{run_name}")
+        assert cfg["paths"]["output_checkpoint"].endswith(f"/runs/{run_name}/joint_finetune.pt")
+        assert cfg["train"]["warmup_steps"] == 0
+        assert cfg["train"]["audio_window_seconds"] == 3.0
+        assert cfg["train"]["audio_head_type"] == "audiogs"
+        assert cfg["train"]["audio_loss_type"] == "audiogs_mono_diff"
+
+        script = (Path("scripts") / script_name).read_text()
+        assert "--audio-window-seconds 3.0" in script
+        assert "audiogs_head_camera_frame" in script
+
+    run_all = (Path("scripts") / "run_joint_audiogs_head_camera_frame_all.sh").read_text()
+    assert "train_joint_audiogs_head_camera_frame_all.sh" in run_all
+    assert "eval_joint_audiogs_head_camera_frame_all.sh" in run_all
