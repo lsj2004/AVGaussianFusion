@@ -143,6 +143,7 @@ def evaluate_joint_audio_checkpoint(
             pred_window = model.render_audio(
                 render_time,
                 audio_sample["source_audio"].to(device),
+                camera_w2c=visual_sample["w2c"].to(device),
             )
             preds.append(pred_window.detach().cpu())
             target_window = audio_sample["target_audio"].to(pred_window)

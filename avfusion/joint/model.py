@@ -25,8 +25,13 @@ class JointAVGaussianModel(nn.Module):
     def render_rgb(self, batch: dict, sh_degree: int | None = None) -> Tensor:
         return self.bridge.render_rgb(batch, sh_degree=sh_degree)
 
-    def render_audio(self, t: Tensor, source_audio: Tensor) -> Tensor:
-        return self.audio_head(self.bridge.query_state(t), source_audio)
+    def render_audio(
+        self,
+        t: Tensor,
+        source_audio: Tensor,
+        camera_w2c: Tensor | None = None,
+    ) -> Tensor:
+        return self.audio_head(self.bridge.query_state(t), source_audio, camera_w2c=camera_w2c)
 
     def parameter_groups(self, shared_lr: float, audio_lr: float) -> list[dict]:
         return [

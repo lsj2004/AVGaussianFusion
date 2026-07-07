@@ -297,11 +297,13 @@ def test_train_joint_finetune_updates_shared_geometry_and_audio_head(tmp_path):
     means_before = model.shared_gaussians.means.detach().clone()
     audio_before = model.audio_head.mono_gain.detach().clone()
     render_times = []
+    render_w2cs = []
     original_render_audio = model.render_audio
 
-    def spy_render_audio(t, source_audio):
+    def spy_render_audio(t, source_audio, camera_w2c=None):
         render_times.append(float(t.detach().cpu().reshape(-1)[0]))
-        return original_render_audio(t, source_audio)
+        render_w2cs.append(camera_w2c.detach().cpu().clone() if camera_w2c is not None else None)
+        return original_render_audio(t, source_audio, camera_w2c=camera_w2c)
 
     model.render_audio = spy_render_audio
 
@@ -327,6 +329,8 @@ def test_train_joint_finetune_updates_shared_geometry_and_audio_head(tmp_path):
     assert losses[0]["start_sample"] == 267
     assert losses[1]["frame"] == 9
     assert render_times[-2:] == pytest.approx([8 / 30, 9 / 30])
+    assert render_w2cs[-2:] and all(w2c is not None for w2c in render_w2cs[-2:])
+    assert render_w2cs[-1].shape == (1, 4, 4)
     assert not torch.equal(model.shared_gaussians.means.detach(), means_before)
     assert not torch.equal(model.audio_head.mono_gain.detach(), audio_before)
 

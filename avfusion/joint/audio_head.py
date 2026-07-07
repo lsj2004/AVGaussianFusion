@@ -27,7 +27,12 @@ class JointAudioHead(nn.Module):
     def active_count(self) -> int:
         return self.top_k
 
-    def forward(self, state: dict[str, Tensor], source_audio: Tensor) -> Tensor:
+    def forward(
+        self,
+        state: dict[str, Tensor],
+        source_audio: Tensor,
+        camera_w2c: Tensor | None = None,
+    ) -> Tensor:
         if source_audio.ndim != 2 or source_audio.shape[0] != 2:
             raise ValueError(f"source_audio must have shape (2, samples), got {tuple(source_audio.shape)}")
         xyz = state["xyz"]
@@ -124,7 +129,12 @@ class SpectralJointAudioHead(nn.Module):
         weights = weights / weights.sum(dim=0, keepdim=True).clamp_min(1e-6)
         return indices, weights
 
-    def forward(self, state: dict[str, Tensor], source_audio: Tensor) -> Tensor:
+    def forward(
+        self,
+        state: dict[str, Tensor],
+        source_audio: Tensor,
+        camera_w2c: Tensor | None = None,
+    ) -> Tensor:
         if source_audio.ndim != 2 or source_audio.shape[0] != 2:
             raise ValueError(f"source_audio must have shape (2, samples), got {tuple(source_audio.shape)}")
         if source_audio.shape[-1] < self.n_fft:
@@ -259,8 +269,32 @@ class AudioGSMaskedSpectralHead(nn.Module):
     def active_count(self) -> int:
         return self.top_k
 
-    def _direction_features(self, xyz: Tensor, rotation: Tensor) -> tuple[Tensor, Tensor]:
-        direction = F.normalize(xyz + torch.tanh(rotation), dim=-1, eps=1e-6)
+    @staticmethod
+    def _world_to_camera_xyz(xyz: Tensor, camera_w2c: Tensor | None) -> Tensor:
+        if camera_w2c is None:
+            return xyz
+        w2c = torch.as_tensor(camera_w2c, device=xyz.device, dtype=xyz.dtype)
+        if w2c.ndim == 3:
+            if w2c.shape[0] != 1:
+                raise ValueError(
+                    "AudioGSMaskedSpectralHead expects a single camera pose per audio render, "
+                    f"got batch={w2c.shape[0]}"
+                )
+            w2c = w2c[0]
+        if w2c.shape != (4, 4):
+            raise ValueError(f"camera_w2c must have shape (4, 4) or (1, 4, 4), got {tuple(w2c.shape)}")
+        rotation = w2c[:3, :3]
+        translation = w2c[:3, 3]
+        return xyz @ rotation.T + translation.reshape(1, 3)
+
+    def _direction_features(
+        self,
+        xyz: Tensor,
+        rotation: Tensor,
+        camera_w2c: Tensor | None = None,
+    ) -> tuple[Tensor, Tensor]:
+        camera_xyz = self._world_to_camera_xyz(xyz, camera_w2c)
+        direction = F.normalize(camera_xyz + torch.tanh(rotation), dim=-1, eps=1e-6)
         ones = torch.ones(direction.shape[0], 1, device=xyz.device, dtype=xyz.dtype)
         x, y, z = direction.unbind(dim=-1)
         degree1 = [ones.reshape(-1), x, y, z]
@@ -285,7 +319,7 @@ class AudioGSMaskedSpectralHead(nn.Module):
                 ],
                 dim=-1,
             )
-        distance = xyz.norm(dim=-1, keepdim=True).clamp_min(1e-4)
+        distance = camera_xyz.norm(dim=-1, keepdim=True).clamp_min(1e-4)
         return features, distance
 
     @staticmethod
@@ -299,7 +333,12 @@ class AudioGSMaskedSpectralHead(nn.Module):
         right = mono_mag * (1.0 - float(diff_lr_sign) * diff)
         return left.clamp_min(0.0), right.clamp_min(0.0)
 
-    def _render_masks(self, state: dict[str, Tensor], source_magnitude: Tensor) -> tuple[Tensor, Tensor]:
+    def _render_masks(
+        self,
+        state: dict[str, Tensor],
+        source_magnitude: Tensor,
+        camera_w2c: Tensor | None = None,
+    ) -> tuple[Tensor, Tensor]:
         xyz = state["xyz"]
         opacity = state["opacity"]
         velocity = state["velocity"]
@@ -314,7 +353,11 @@ class AudioGSMaskedSpectralHead(nn.Module):
 
         selected_xyz = xyz.index_select(0, indices)
         selected_rotation = self.rotation.index_select(0, local_indices)
-        features, distance = self._direction_features(selected_xyz, selected_rotation)
+        features, distance = self._direction_features(
+            selected_xyz,
+            selected_rotation,
+            camera_w2c=camera_w2c,
+        )
         point_weight = torch.softmax(scores, dim=0).reshape(-1, 1)
         freq_atten = torch.sigmoid(self.freq_atten_logit.index_select(0, local_indices))
         distance_atten = distance.pow(-self.freq_atten_alpha)
@@ -334,7 +377,12 @@ class AudioGSMaskedSpectralHead(nn.Module):
         diff_mask = torch.sigmoid(diff_logits).reshape(-1, 1)
         return mono_mask.expand_as(source_magnitude), diff_mask.expand_as(source_magnitude)
 
-    def forward(self, state: dict[str, Tensor], source_audio: Tensor) -> Tensor:
+    def forward(
+        self,
+        state: dict[str, Tensor],
+        source_audio: Tensor,
+        camera_w2c: Tensor | None = None,
+    ) -> Tensor:
         if source_audio.ndim != 2 or source_audio.shape[0] != 2:
             raise ValueError(f"source_audio must have shape (2, samples), got {tuple(source_audio.shape)}")
         if source_audio.shape[-1] < self.n_fft:
@@ -364,7 +412,7 @@ class AudioGSMaskedSpectralHead(nn.Module):
         mag_l = spec_l.abs()
         mag_r = spec_r.abs()
         source_magnitude = torch.nan_to_num(0.5 * (mag_l + mag_r), nan=0.0, posinf=0.0, neginf=0.0)
-        mono_mask, diff_mask = self._render_masks(state, source_magnitude)
+        mono_mask, diff_mask = self._render_masks(state, source_magnitude, camera_w2c=camera_w2c)
         mono_mag = torch.nan_to_num(mono_mask * source_magnitude, nan=0.0, posinf=0.0, neginf=0.0)
         left_mag, right_mag = self.combine_mono_diff_magnitudes(
             mono_mag,

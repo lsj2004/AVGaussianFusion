@@ -47,11 +47,13 @@ def test_evaluate_joint_audio_checkpoint_writes_audiogs_metrics(monkeypatch, tmp
         fake_load_checkpoint,
     )
     render_times = []
+    render_w2cs = []
     original_render_audio = JointAVGaussianModel.render_audio
 
-    def spy_render_audio(self, t, source_audio):
+    def spy_render_audio(self, t, source_audio, camera_w2c=None):
         render_times.append(float(t.detach().cpu().reshape(-1)[0]))
-        return original_render_audio(self, t, source_audio)
+        render_w2cs.append(camera_w2c.detach().cpu().clone() if camera_w2c is not None else None)
+        return original_render_audio(self, t, source_audio, camera_w2c=camera_w2c)
 
     monkeypatch.setattr(JointAVGaussianModel, "render_audio", spy_render_audio)
     metric_lengths = []
@@ -88,6 +90,8 @@ def test_evaluate_joint_audio_checkpoint_writes_audiogs_metrics(monkeypatch, tmp
     assert summary["num_windows"] == 2
     assert summary["audio_window_seconds"] == 0.5
     assert render_times == pytest.approx([0.0, 1 / 30])
+    assert len(render_w2cs) == 2
+    assert all(w2c is not None and w2c.shape == (1, 4, 4) for w2c in render_w2cs)
     assert metric_lengths == [8000, 8000]
     assert include_dpam_flags == [False, False]
     assert summary["MAG"] == pytest.approx(1.5)

@@ -1,4 +1,5 @@
 import torch
+import pytest
 
 from avfusion.joint.audio_head import (
     AudioGSMaskedSpectralHead,
@@ -148,6 +149,39 @@ def test_audiogs_masked_spectral_head_only_allocates_audio_params_for_top_k_carr
     assert head.freq_atten_logit.shape == (7, 257)
     assert head.mono_sh.shape == (7, 257, 16)
     assert head.diff_sh.shape == (7, 257, 16)
+
+
+def test_audiogs_masked_spectral_head_uses_camera_frame_direction_features():
+    head = AudioGSMaskedSpectralHead(num_points=5, num_frequency_bins=257, top_k=3)
+    xyz = torch.tensor([[1.0, 0.0, 0.0]])
+    rotation = torch.zeros(1, 3)
+    identity_w2c = torch.eye(4).reshape(1, 4, 4)
+    rot_z_w2c = torch.tensor(
+        [
+            [
+                [0.0, -1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ]
+        ]
+    )
+
+    identity_features, identity_distance = head._direction_features(
+        xyz,
+        rotation,
+        camera_w2c=identity_w2c,
+    )
+    rotated_features, rotated_distance = head._direction_features(
+        xyz,
+        rotation,
+        camera_w2c=rot_z_w2c,
+    )
+
+    assert identity_distance.item() == pytest.approx(1.0)
+    assert rotated_distance.item() == pytest.approx(1.0)
+    assert identity_features[0, 1:4].tolist() == pytest.approx([1.0, 0.0, 0.0])
+    assert rotated_features[0, 1:4].tolist() == pytest.approx([0.0, 1.0, 0.0])
 
 
 def test_audiogs_masked_spectral_head_backpropagates_to_sh_masks_and_geometry():

@@ -522,8 +522,19 @@ def train_joint_finetune(
                 "target_audio": sample["target_audio"],
             }
             render_time = torch.tensor([[0.0]], device=device)
+        camera_w2c = None
+        if visual_sample is not None:
+            visual_sample = _move_tensor_values(
+                visual_sample,
+                device,
+            )
+            camera_w2c = visual_sample["w2c"]
         optimizer.zero_grad(set_to_none=True)
-        pred = model.render_audio(render_time, audio_sample["source_audio"].to(device))
+        pred = model.render_audio(
+            render_time,
+            audio_sample["source_audio"].to(device),
+            camera_w2c=camera_w2c,
+        )
         target = audio_sample["target_audio"].to(pred)
         audio_loss = compute_audio_training_loss(
             pred,
@@ -535,10 +546,6 @@ def train_joint_finetune(
         )
         rgb_loss = audio_loss.new_zeros(())
         if visual_sample is not None:
-            visual_sample = _move_tensor_values(
-                visual_sample,
-                device,
-            )
             pred_rgb = model.render_rgb(visual_sample)
             rgb_loss = torch.nn.functional.l1_loss(
                 pred_rgb,
