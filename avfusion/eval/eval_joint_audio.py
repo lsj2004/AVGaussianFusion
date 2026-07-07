@@ -75,7 +75,12 @@ def _attach_sampled_dpam_metrics(
 def _restore_joint_model(checkpoint: dict) -> torch.nn.Module:
     config = checkpoint.get("config") or {}
     top_k = int(config.get("top_k", 8192))
-    model = build_model(checkpoint["ftgspp_checkpoint"], top_k=top_k)
+    audio_head_type = str(config.get("audio_head_type", "simple"))
+    model = build_model(
+        checkpoint["ftgspp_checkpoint"],
+        top_k=top_k,
+        audio_head_type=audio_head_type,
+    )
     model.shared_gaussians.load_state_dict(checkpoint["shared_gaussians"], strict=False)
     model.audio_head.load_state_dict(checkpoint["audio_head"])
     model.eval()

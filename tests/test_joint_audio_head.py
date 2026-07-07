@@ -1,6 +1,6 @@
 import torch
 
-from avfusion.joint.audio_head import JointAudioHead
+from avfusion.joint.audio_head import JointAudioHead, SpectralJointAudioHead
 
 
 def _state(num_points=5):
@@ -82,3 +82,34 @@ def test_joint_audio_head_requires_at_least_two_points_for_route_weighting():
         assert "at least two points" in str(exc)
     else:
         raise AssertionError("num_points=1 should raise ValueError")
+
+
+def test_spectral_joint_audio_head_outputs_stereo_audio_with_stft_grid():
+    head = SpectralJointAudioHead(num_points=5, num_frequency_bins=257, top_k=3)
+    source = torch.randn(2, 2048)
+
+    pred = head(_state(), source)
+
+    assert pred.shape == (2, 2048)
+    assert torch.isfinite(pred).all()
+    assert head.active_count == 3
+
+
+def test_spectral_joint_audio_head_backpropagates_to_masks_and_geometry():
+    head = SpectralJointAudioHead(num_points=5, num_frequency_bins=257, top_k=4)
+    state = _state()
+    source = torch.randn(2, 2048)
+
+    loss = head(state, source).pow(2).mean()
+    loss.backward()
+
+    _assert_nonzero_grad(head.audio_opacity)
+    _assert_nonzero_grad(head.mono_mask)
+    _assert_nonzero_grad(head.diff_mask)
+    _assert_nonzero_grad(head.distance_logit)
+    assert state["xyz"].grad is not None
+    assert state["xyz"].grad.abs().sum() > 0
+    assert state["opacity"].grad is not None
+    assert state["opacity"].grad.abs().sum() > 0
+    assert state["velocity"].grad is not None
+    assert state["velocity"].grad.abs().sum() > 0

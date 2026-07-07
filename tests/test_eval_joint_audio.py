@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from avfusion.eval.eval_joint_audio import evaluate_joint_audio_checkpoint
-from avfusion.joint.audio_head import JointAudioHead
+from avfusion.joint.audio_head import JointAudioHead, SpectralJointAudioHead
 from avfusion.joint.ftgspp_bridge import FTGSRendererBridge
 from avfusion.joint.model import JointAVGaussianModel
 from avfusion.train.train_joint_av_gaussians import save_joint_checkpoint
@@ -165,3 +165,67 @@ def test_evaluate_joint_audio_checkpoint_can_sample_dpam_windows(monkeypatch, tm
     assert summary["DPAM"] == pytest.approx(5.5)
     assert summary["DPAM_available"] is True
     assert summary["dpam_num_windows"] == 2
+
+
+def test_evaluate_joint_audio_checkpoint_restores_spectral_audio_head(monkeypatch, tmp_path):
+    manifest = _write_manifest(tmp_path)
+    visual_root = tmp_path / "visual"
+    np.savez(
+        visual_root / "cameras.npz",
+        names=np.array(["cam00", "cam10"]),
+        intrinsics=np.stack([np.eye(3), np.eye(3)]),
+        w2c=np.stack([np.eye(4), np.eye(4)]),
+    )
+    ftgspp_checkpoint = tmp_path / "gaussians.pt"
+    checkpoint = tmp_path / "joint_spectral.pt"
+    output_dir = tmp_path / "eval"
+    ftgspp_checkpoint.write_bytes(b"placeholder")
+    model = JointAVGaussianModel(
+        FTGSRendererBridge(FakeGaussians()),
+        SpectralJointAudioHead(4, top_k=4),
+    )
+    save_joint_checkpoint(
+        output_path=checkpoint,
+        model=model,
+        stage="joint_finetune",
+        ftgspp_checkpoint=ftgspp_checkpoint,
+        manifest_path=manifest,
+        config={
+            "top_k": 4,
+            "visual_scale": 0.5,
+            "audio_window_seconds": 0.5,
+            "audio_head_type": "spectral",
+        },
+        loss_history=[0.1],
+    )
+
+    monkeypatch.setattr(
+        "avfusion.train.train_joint_av_gaussians.FTGSRendererBridge.load_checkpoint",
+        lambda path: FTGSRendererBridge(FakeGaussians()),
+    )
+
+    def fake_metrics(pred, target, sample_rate, include_dpam=True):
+        return {
+            "MAG": 1.0,
+            "ENV": 2.0,
+            "LRE": 3.0,
+            "RTE": None,
+            "RTE_available": False,
+            "RTE_error": "not configured",
+            "DPAM": None,
+            "DPAM_available": False,
+            "DPAM_error": "not configured",
+        }
+
+    monkeypatch.setattr("avfusion.eval.eval_joint_audio.compute_audiogs_metrics", fake_metrics)
+
+    summary = evaluate_joint_audio_checkpoint(
+        manifest_path=manifest,
+        checkpoint_path=checkpoint,
+        output_dir=output_dir,
+        frame_reader=lambda path, frame_idx: torch.zeros(4, 6, 3),
+        max_frames=1,
+    )
+
+    assert summary["MAG"] == pytest.approx(1.0)
+    assert json.loads((output_dir / "audio_summary.json").read_text())["checkpoint"] == str(checkpoint)

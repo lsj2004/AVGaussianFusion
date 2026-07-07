@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -8,11 +9,13 @@ from typing import Any
 
 import torch
 import yaml
+import soundfile as sf
 
 from avfusion.audio import stft_magnitude_loss
 from avfusion.data.audio_video_dataset import AudioCropDataset, TimedAudioCropper
+from avfusion.data.manifest import SceneManifest
 from avfusion.data.visual_frame_dataset import FrameReader, VisualFrameDataset
-from avfusion.joint.audio_head import JointAudioHead
+from avfusion.joint.audio_head import JointAudioHead, SpectralJointAudioHead
 from avfusion.joint.ftgspp_bridge import FTGSRendererBridge
 from avfusion.joint.losses import geometry_regularization
 from avfusion.joint.model import JointAVGaussianModel
@@ -34,6 +37,7 @@ class TrainingConfig:
     audio_loss_weight: float
     visual_scale: float
     audio_window_seconds: float
+    audio_head_type: str
     config: str | None = None
 
 
@@ -66,6 +70,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--audio-lr", type=float)
     parser.add_argument("--shared-lr", type=float)
     parser.add_argument("--audio-window-seconds", type=float)
+    parser.add_argument("--audio-head-type", choices=["simple", "spectral"])
     return parser
 
 
@@ -137,6 +142,9 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
     audio_window_seconds = args.audio_window_seconds
     if audio_window_seconds is None:
         audio_window_seconds = _config_train_value(config, "audio_window_seconds", 0.5)
+    audio_head_type = args.audio_head_type
+    if audio_head_type is None:
+        audio_head_type = _config_train_value(config, "audio_head_type", "simple")
 
     warmup_steps = int(_require_value(warmup_steps, "train.warmup_steps"))
     joint_steps = int(_require_value(joint_steps, "train.joint_steps"))
@@ -152,6 +160,7 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
     audio_window_seconds = float(
         _require_value(audio_window_seconds, "train.audio_window_seconds")
     )
+    audio_head_type = str(_require_value(audio_head_type, "train.audio_head_type"))
     if warmup_steps < 0:
         raise ValueError(f"train.warmup_steps must be nonnegative, got {warmup_steps}")
     if joint_steps < 0:
@@ -174,6 +183,10 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
         raise ValueError(
             f"train.audio_window_seconds must be positive, got {audio_window_seconds}"
         )
+    if audio_head_type not in {"simple", "spectral"}:
+        raise ValueError(
+            f"train.audio_head_type must be one of simple/spectral, got {audio_head_type!r}"
+        )
 
     return TrainingConfig(
         manifest=str(_require_value(manifest, "paths.manifest")),
@@ -190,18 +203,28 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
         audio_loss_weight=audio_loss_weight,
         visual_scale=visual_scale,
         audio_window_seconds=audio_window_seconds,
+        audio_head_type=audio_head_type,
         config=args.config,
     )
 
 
-def build_model(ftgspp_checkpoint: str | Path, top_k: int = 8192) -> JointAVGaussianModel:
+def build_model(
+    ftgspp_checkpoint: str | Path,
+    top_k: int = 8192,
+    audio_head_type: str = "simple",
+) -> JointAVGaussianModel:
     bridge = FTGSRendererBridge.load_checkpoint(ftgspp_checkpoint)
     means = bridge.gaussians.means
     num_points = int(means.shape[0])
     if num_points < 2:
         raise ValueError(f"Route B joint training requires at least two gaussians, got {num_points}")
     effective_top_k = min(int(top_k), num_points)
-    audio_head = JointAudioHead(num_points=num_points, top_k=effective_top_k)
+    if audio_head_type == "simple":
+        audio_head = JointAudioHead(num_points=num_points, top_k=effective_top_k)
+    elif audio_head_type == "spectral":
+        audio_head = SpectralJointAudioHead(num_points=num_points, top_k=effective_top_k)
+    else:
+        raise ValueError(f"unknown audio_head_type {audio_head_type!r}")
     return JointAVGaussianModel(bridge, audio_head)
 
 
@@ -236,6 +259,65 @@ def save_joint_checkpoint(
         },
         output_path,
     )
+
+
+def _audio_frames(path: str | Path) -> int:
+    return int(sf.info(str(path)).frames)
+
+
+def _compute_valid_aligned_samples(
+    manifest_path: str | Path,
+    audio_window_seconds: float,
+) -> dict[str, int | None]:
+    manifest = SceneManifest.load(manifest_path)
+    sample_rate = int(manifest.audio.sample_rate)
+    crop_samples = int(round(float(audio_window_seconds) * sample_rate))
+    source_frames = _audio_frames(manifest.audio.source_path)
+    per_camera_valid = []
+    for camera in manifest.train_cameras:
+        target_frames = _audio_frames(manifest.cameras[camera].audio_path)
+        max_frames = min(source_frames, target_frames)
+        valid = 0
+        for time_seconds in manifest.frame_times:
+            center_sample = int(round(float(time_seconds) * sample_rate))
+            start_sample = center_sample - crop_samples // 2
+            end_sample = start_sample + crop_samples
+            if start_sample >= 0 and end_sample <= max_frames:
+                valid += 1
+        per_camera_valid.append(valid)
+    unique_valid_counts = sorted(set(per_camera_valid))
+    return {
+        "valid_aligned_samples": int(sum(per_camera_valid)),
+        "valid_frames_per_camera": (
+            int(unique_valid_counts[0]) if len(unique_valid_counts) == 1 else None
+        ),
+    }
+
+
+def write_train_summary(
+    output_path: str | Path,
+    manifest_path: str | Path,
+    summary: dict[str, float | int | str],
+    audio_window_seconds: float,
+) -> None:
+    manifest = SceneManifest.load(manifest_path)
+    valid = _compute_valid_aligned_samples(
+        manifest_path,
+        audio_window_seconds=audio_window_seconds,
+    )
+    payload = {
+        **summary,
+        "manifest": str(manifest_path),
+        "train_cams": len(manifest.train_cameras),
+        "eval_cam": manifest.eval_cameras[0] if manifest.eval_cameras else None,
+        "source_audio": Path(manifest.audio.source_path).name,
+        "audio_window_seconds": float(audio_window_seconds),
+        "valid_aligned_samples": int(valid["valid_aligned_samples"]),
+        "valid_frames_per_camera": valid["valid_frames_per_camera"],
+    }
+    summary_path = Path(output_path).parent / "train_summary.json"
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
 def train_audio_warmup(
@@ -396,11 +478,12 @@ def train_and_save(
     audio_loss_weight: float = 1.0,
     visual_scale: float = 0.125,
     audio_window_seconds: float = 0.5,
+    audio_head_type: str = "simple",
     ftgspp_memmap: str | Path | None = None,
     config_path: str | Path | None = None,
     frame_reader: FrameReader | None = None,
 ) -> dict[str, float | int | str]:
-    model = build_model(ftgspp_checkpoint, top_k=top_k)
+    model = build_model(ftgspp_checkpoint, top_k=top_k, audio_head_type=audio_head_type)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     warmup_loss_history = train_audio_warmup(
@@ -448,6 +531,7 @@ def train_and_save(
         "audio_loss_weight": float(audio_loss_weight),
         "visual_scale": float(visual_scale),
         "audio_window_seconds": float(audio_window_seconds),
+        "audio_head_type": str(audio_head_type),
         "config": str(config_path) if config_path is not None else None,
         "implemented_stages": implemented_stages,
         "warmup_loss_history": warmup_loss_history,
@@ -462,12 +546,13 @@ def train_and_save(
         config=config,
         loss_history=loss_history,
     )
-    return {
+    summary = {
         "route": "B_joint_av",
         "stage": stage,
         "steps": int(warmup_steps + joint_steps),
         "warmup_steps": int(warmup_steps),
         "joint_steps": int(joint_steps),
+        "audio_head_type": str(audio_head_type),
         "final_loss": (
             joint_loss_history[-1]["total"]
             if joint_loss_history
@@ -477,6 +562,13 @@ def train_and_save(
         ),
         "output": str(output_path),
     }
+    write_train_summary(
+        output_path=output_path,
+        manifest_path=manifest_path,
+        summary=summary,
+        audio_window_seconds=audio_window_seconds,
+    )
+    return summary
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -496,6 +588,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         audio_loss_weight=config.audio_loss_weight,
         visual_scale=config.visual_scale,
         audio_window_seconds=config.audio_window_seconds,
+        audio_head_type=config.audio_head_type,
         ftgspp_memmap=config.ftgspp_memmap,
         config_path=config.config,
     )
