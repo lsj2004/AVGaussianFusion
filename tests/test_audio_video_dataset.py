@@ -6,7 +6,7 @@ import soundfile as sf
 import torch
 import pytest
 
-from avfusion.data.audio_video_dataset import AudioCropDataset
+from avfusion.data.audio_video_dataset import AudioCropDataset, _apply_audiogs_bandpass
 from avfusion.data.build_scene_manifest import build_manifest
 
 
@@ -151,3 +151,25 @@ def test_timed_audio_cropper_can_reject_padding_windows(tmp_path):
 
     with pytest.raises(ValueError, match="padding"):
         cropper.get_crop("cam00", time_seconds=0.0)
+
+
+def test_audiogs_bandpass_suppresses_low_frequency_component():
+    sample_rate = 16000
+    t = torch.arange(sample_rate, dtype=torch.float32) / sample_rate
+    low = torch.sin(2 * torch.pi * 50.0 * t)
+    high = torch.sin(2 * torch.pi * 1000.0 * t)
+    audio = torch.stack([low + high, low + high])
+
+    filtered = _apply_audiogs_bandpass(
+        audio,
+        sample_rate,
+        low_hz=150.0,
+        high_hz=-1.0,
+        order=5,
+    )
+    low_basis = low / low.norm()
+    high_basis = high / high.norm()
+
+    low_energy = torch.matmul(filtered[0], low_basis).abs()
+    high_energy = torch.matmul(filtered[0], high_basis).abs()
+    assert high_energy > 100 * low_energy

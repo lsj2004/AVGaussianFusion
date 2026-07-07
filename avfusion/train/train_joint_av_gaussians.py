@@ -11,11 +11,11 @@ import torch
 import yaml
 import soundfile as sf
 
-from avfusion.audio import stft_magnitude_loss
+from avfusion.audio import audiogs_mono_diff_loss, stft_magnitude_loss
 from avfusion.data.audio_video_dataset import AudioCropDataset, TimedAudioCropper
 from avfusion.data.manifest import SceneManifest
 from avfusion.data.visual_frame_dataset import FrameReader, VisualFrameDataset
-from avfusion.joint.audio_head import JointAudioHead, SpectralJointAudioHead
+from avfusion.joint.audio_head import AudioGSMaskedSpectralHead, JointAudioHead, SpectralJointAudioHead
 from avfusion.joint.ftgspp_bridge import FTGSRendererBridge
 from avfusion.joint.losses import geometry_regularization
 from avfusion.joint.model import JointAVGaussianModel
@@ -38,6 +38,11 @@ class TrainingConfig:
     visual_scale: float
     audio_window_seconds: float
     audio_head_type: str
+    audio_loss_type: str
+    audio_diff_weight: float
+    audio_use_log_mag_loss: bool
+    audio_lre_loss_weight: float
+    audio_bandpass: dict[str, float | bool]
     config: str | None = None
 
 
@@ -70,7 +75,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--audio-lr", type=float)
     parser.add_argument("--shared-lr", type=float)
     parser.add_argument("--audio-window-seconds", type=float)
-    parser.add_argument("--audio-head-type", choices=["simple", "spectral"])
+    parser.add_argument("--audio-head-type", choices=["simple", "spectral", "audiogs"])
+    parser.add_argument("--audio-loss-type", choices=["stft_log_l1", "audiogs_mono_diff"])
+    parser.add_argument("--audio-diff-weight", type=float)
+    parser.add_argument("--audio-use-log-mag-loss", action="store_true")
+    parser.add_argument("--audio-lre-loss-weight", type=float)
     return parser
 
 
@@ -145,6 +154,21 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
     audio_head_type = args.audio_head_type
     if audio_head_type is None:
         audio_head_type = _config_train_value(config, "audio_head_type", "simple")
+    audio_loss_type = args.audio_loss_type
+    if audio_loss_type is None:
+        audio_loss_type = _config_train_value(config, "audio_loss_type", "stft_log_l1")
+    audio_diff_weight = args.audio_diff_weight
+    if audio_diff_weight is None:
+        audio_diff_weight = _config_loss_value(config, "audio_diff_weight", 2.0)
+    audio_use_log_mag_loss = bool(args.audio_use_log_mag_loss)
+    if not audio_use_log_mag_loss:
+        audio_use_log_mag_loss = bool(_config_loss_value(config, "audio_use_log_mag_loss", False))
+    audio_lre_loss_weight = args.audio_lre_loss_weight
+    if audio_lre_loss_weight is None:
+        audio_lre_loss_weight = _config_loss_value(config, "audio_lre_loss_weight", 0.0)
+    audio_bandpass = _config_loss_value(config, "audio_bandpass", {})
+    if not isinstance(audio_bandpass, dict):
+        raise ValueError("losses.audio_bandpass must be a mapping when provided")
 
     warmup_steps = int(_require_value(warmup_steps, "train.warmup_steps"))
     joint_steps = int(_require_value(joint_steps, "train.joint_steps"))
@@ -161,6 +185,11 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
         _require_value(audio_window_seconds, "train.audio_window_seconds")
     )
     audio_head_type = str(_require_value(audio_head_type, "train.audio_head_type"))
+    audio_loss_type = str(_require_value(audio_loss_type, "train.audio_loss_type"))
+    audio_diff_weight = float(_require_value(audio_diff_weight, "losses.audio_diff_weight"))
+    audio_lre_loss_weight = float(
+        _require_value(audio_lre_loss_weight, "losses.audio_lre_loss_weight")
+    )
     if warmup_steps < 0:
         raise ValueError(f"train.warmup_steps must be nonnegative, got {warmup_steps}")
     if joint_steps < 0:
@@ -183,9 +212,21 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
         raise ValueError(
             f"train.audio_window_seconds must be positive, got {audio_window_seconds}"
         )
-    if audio_head_type not in {"simple", "spectral"}:
+    if audio_head_type not in {"simple", "spectral", "audiogs"}:
         raise ValueError(
-            f"train.audio_head_type must be one of simple/spectral, got {audio_head_type!r}"
+            "train.audio_head_type must be one of simple/spectral/audiogs, "
+            f"got {audio_head_type!r}"
+        )
+    if audio_loss_type not in {"stft_log_l1", "audiogs_mono_diff"}:
+        raise ValueError(
+            "train.audio_loss_type must be one of stft_log_l1/audiogs_mono_diff, "
+            f"got {audio_loss_type!r}"
+        )
+    if audio_diff_weight < 0:
+        raise ValueError(f"losses.audio_diff_weight must be nonnegative, got {audio_diff_weight}")
+    if audio_lre_loss_weight < 0:
+        raise ValueError(
+            f"losses.audio_lre_loss_weight must be nonnegative, got {audio_lre_loss_weight}"
         )
 
     return TrainingConfig(
@@ -204,8 +245,34 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
         visual_scale=visual_scale,
         audio_window_seconds=audio_window_seconds,
         audio_head_type=audio_head_type,
+        audio_loss_type=audio_loss_type,
+        audio_diff_weight=audio_diff_weight,
+        audio_use_log_mag_loss=audio_use_log_mag_loss,
+        audio_lre_loss_weight=audio_lre_loss_weight,
+        audio_bandpass=dict(audio_bandpass),
         config=args.config,
     )
+
+
+def compute_audio_training_loss(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    loss_type: str,
+    diff_weight: float = 2.0,
+    use_log_mag_loss: bool = False,
+    lre_loss_weight: float = 0.0,
+) -> torch.Tensor:
+    if loss_type == "stft_log_l1":
+        return stft_magnitude_loss(pred, target)
+    if loss_type == "audiogs_mono_diff":
+        return audiogs_mono_diff_loss(
+            pred,
+            target,
+            diff_weight=diff_weight,
+            use_log_mag_loss=use_log_mag_loss,
+            lre_loss_weight=lre_loss_weight,
+        )
+    raise ValueError(f"unknown audio loss type {loss_type!r}")
 
 
 def build_model(
@@ -223,6 +290,18 @@ def build_model(
         audio_head = JointAudioHead(num_points=num_points, top_k=effective_top_k)
     elif audio_head_type == "spectral":
         audio_head = SpectralJointAudioHead(num_points=num_points, top_k=effective_top_k)
+    elif audio_head_type == "audiogs":
+        with torch.no_grad():
+            state0 = bridge.query_state(torch.zeros(1, 1, device=means.device, dtype=means.dtype))
+            carrier_scores = state0["opacity"].reshape(-1).detach().cpu()
+            carrier_indices = torch.argsort(carrier_scores, descending=True, stable=True)[
+                :effective_top_k
+            ]
+        audio_head = AudioGSMaskedSpectralHead(
+            num_points=num_points,
+            top_k=effective_top_k,
+            carrier_indices=carrier_indices,
+        )
     else:
         raise ValueError(f"unknown audio_head_type {audio_head_type!r}")
     return JointAVGaussianModel(bridge, audio_head)
@@ -325,10 +404,15 @@ def train_audio_warmup(
     manifest_path: str | Path,
     steps: int,
     lr: float,
+    audio_loss_type: str = "stft_log_l1",
+    audio_diff_weight: float = 2.0,
+    audio_use_log_mag_loss: bool = False,
+    audio_lre_loss_weight: float = 0.0,
+    audio_bandpass: dict[str, float | bool] | None = None,
 ) -> list[float]:
     if steps <= 0:
         return []
-    dataset = AudioCropDataset(manifest_path, split="train")
+    dataset = AudioCropDataset(manifest_path, split="train", bandpass=audio_bandpass)
     if len(dataset) == 0:
         raise ValueError("training split is empty")
 
@@ -343,7 +427,14 @@ def train_audio_warmup(
         optimizer.zero_grad(set_to_none=True)
         pred = model.render_audio(render_time, sample["source_audio"].to(device))
         target = sample["target_audio"].to(pred)
-        loss = stft_magnitude_loss(pred, target)
+        loss = compute_audio_training_loss(
+            pred,
+            target,
+            audio_loss_type,
+            diff_weight=audio_diff_weight,
+            use_log_mag_loss=audio_use_log_mag_loss,
+            lre_loss_weight=audio_lre_loss_weight,
+        )
         loss.backward()
         optimizer.step()
         loss_history.append(float(loss.detach().cpu().item()))
@@ -362,6 +453,11 @@ def train_joint_finetune(
     audio_loss_weight: float,
     visual_scale: float,
     audio_window_seconds: float = 0.5,
+    audio_loss_type: str = "stft_log_l1",
+    audio_diff_weight: float = 2.0,
+    audio_use_log_mag_loss: bool = False,
+    audio_lre_loss_weight: float = 0.0,
+    audio_bandpass: dict[str, float | bool] | None = None,
     ftgspp_memmap: str | Path | None = None,
     frame_reader: FrameReader | None = None,
 ) -> list[dict[str, float]]:
@@ -369,7 +465,7 @@ def train_joint_finetune(
         return []
     if rgb_loss_weight <= 0:
         raise ValueError("rgb_loss_weight must be positive for joint AV fine-tuning")
-    dataset = AudioCropDataset(manifest_path, split="train")
+    dataset = AudioCropDataset(manifest_path, split="train", bandpass=audio_bandpass)
     if len(dataset) == 0:
         raise ValueError("training split is empty")
     visual_dataset = None
@@ -388,6 +484,7 @@ def train_joint_finetune(
         crop_seconds=audio_window_seconds,
         mode="center",
         allow_padding=False,
+        bandpass=audio_bandpass,
     )
 
     model.unfreeze_shared_geometry()
@@ -428,7 +525,14 @@ def train_joint_finetune(
         optimizer.zero_grad(set_to_none=True)
         pred = model.render_audio(render_time, audio_sample["source_audio"].to(device))
         target = audio_sample["target_audio"].to(pred)
-        audio_loss = stft_magnitude_loss(pred, target)
+        audio_loss = compute_audio_training_loss(
+            pred,
+            target,
+            audio_loss_type,
+            diff_weight=audio_diff_weight,
+            use_log_mag_loss=audio_use_log_mag_loss,
+            lre_loss_weight=audio_lre_loss_weight,
+        )
         rgb_loss = audio_loss.new_zeros(())
         if visual_sample is not None:
             visual_sample = _move_tensor_values(
@@ -479,6 +583,11 @@ def train_and_save(
     visual_scale: float = 0.125,
     audio_window_seconds: float = 0.5,
     audio_head_type: str = "simple",
+    audio_loss_type: str = "stft_log_l1",
+    audio_diff_weight: float = 2.0,
+    audio_use_log_mag_loss: bool = False,
+    audio_lre_loss_weight: float = 0.0,
+    audio_bandpass: dict[str, float | bool] | None = None,
     ftgspp_memmap: str | Path | None = None,
     config_path: str | Path | None = None,
     frame_reader: FrameReader | None = None,
@@ -491,6 +600,11 @@ def train_and_save(
         manifest_path=manifest_path,
         steps=warmup_steps,
         lr=audio_lr,
+        audio_loss_type=audio_loss_type,
+        audio_diff_weight=audio_diff_weight,
+        audio_use_log_mag_loss=audio_use_log_mag_loss,
+        audio_lre_loss_weight=audio_lre_loss_weight,
+        audio_bandpass=audio_bandpass,
     )
     joint_loss_history = train_joint_finetune(
         model=model,
@@ -503,6 +617,11 @@ def train_and_save(
         audio_loss_weight=audio_loss_weight,
         visual_scale=visual_scale,
         audio_window_seconds=audio_window_seconds,
+        audio_loss_type=audio_loss_type,
+        audio_diff_weight=audio_diff_weight,
+        audio_use_log_mag_loss=audio_use_log_mag_loss,
+        audio_lre_loss_weight=audio_lre_loss_weight,
+        audio_bandpass=audio_bandpass,
         ftgspp_memmap=ftgspp_memmap,
         frame_reader=frame_reader,
     )
@@ -532,6 +651,11 @@ def train_and_save(
         "visual_scale": float(visual_scale),
         "audio_window_seconds": float(audio_window_seconds),
         "audio_head_type": str(audio_head_type),
+        "audio_loss_type": str(audio_loss_type),
+        "audio_diff_weight": float(audio_diff_weight),
+        "audio_use_log_mag_loss": bool(audio_use_log_mag_loss),
+        "audio_lre_loss_weight": float(audio_lre_loss_weight),
+        "audio_bandpass": dict(audio_bandpass or {}),
         "config": str(config_path) if config_path is not None else None,
         "implemented_stages": implemented_stages,
         "warmup_loss_history": warmup_loss_history,
@@ -553,6 +677,7 @@ def train_and_save(
         "warmup_steps": int(warmup_steps),
         "joint_steps": int(joint_steps),
         "audio_head_type": str(audio_head_type),
+        "audio_loss_type": str(audio_loss_type),
         "final_loss": (
             joint_loss_history[-1]["total"]
             if joint_loss_history
@@ -589,6 +714,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         visual_scale=config.visual_scale,
         audio_window_seconds=config.audio_window_seconds,
         audio_head_type=config.audio_head_type,
+        audio_loss_type=config.audio_loss_type,
+        audio_diff_weight=config.audio_diff_weight,
+        audio_use_log_mag_loss=config.audio_use_log_mag_loss,
+        audio_lre_loss_weight=config.audio_lre_loss_weight,
+        audio_bandpass=config.audio_bandpass,
         ftgspp_memmap=config.ftgspp_memmap,
         config_path=config.config,
     )

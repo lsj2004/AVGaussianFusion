@@ -1,3 +1,5 @@
+import json
+
 import pytest
 import torch
 
@@ -65,6 +67,16 @@ def test_config_file_populates_route_b_training_args(tmp_path):
                 "  audio_lr: 0.003",
                 "  shared_lr: 0.0004",
                 "  audio_window_seconds: 0.5",
+                "  audio_loss_type: audiogs_mono_diff",
+                "losses:",
+                "  audio_diff_weight: 2.0",
+                "  audio_use_log_mag_loss: false",
+                "  audio_lre_loss_weight: 0.0",
+                "  audio_bandpass:",
+                "    enable: true",
+                "    low_hz: 150.0",
+                "    high_hz: -1.0",
+                "    order: 5",
             ]
         )
         + "\n"
@@ -83,6 +95,16 @@ def test_config_file_populates_route_b_training_args(tmp_path):
     assert cfg.audio_lr == pytest.approx(0.003)
     assert cfg.shared_lr == pytest.approx(0.0004)
     assert cfg.audio_window_seconds == pytest.approx(0.5)
+    assert cfg.audio_loss_type == "audiogs_mono_diff"
+    assert cfg.audio_diff_weight == pytest.approx(2.0)
+    assert cfg.audio_use_log_mag_loss is False
+    assert cfg.audio_lre_loss_weight == pytest.approx(0.0)
+    assert cfg.audio_bandpass == {
+        "enable": True,
+        "low_hz": 150.0,
+        "high_hz": -1.0,
+        "order": 5,
+    }
 
 
 def test_explicit_cli_args_override_config_file(tmp_path):
@@ -369,17 +391,31 @@ def test_train_and_save_writes_joint_finetune_checkpoint(monkeypatch, tmp_path):
         audio_loss_weight=1.0,
         visual_scale=0.5,
         audio_window_seconds=0.5,
+        audio_loss_type="audiogs_mono_diff",
+        audio_diff_weight=2.0,
+        audio_use_log_mag_loss=False,
+        audio_lre_loss_weight=0.0,
+        audio_bandpass={"enable": True, "low_hz": 150.0, "high_hz": -1.0},
         frame_reader=lambda path, frame_idx: torch.ones(4, 4, 3),
         config_path=None,
     )
 
     checkpoint = torch.load(output_path, map_location="cpu", weights_only=False)
+    train_summary = json.loads((tmp_path / "train_summary.json").read_text())
     assert summary["stage"] == "joint_finetune"
     assert summary["steps"] == 3
     assert summary["joint_steps"] == 2
+    assert train_summary["train_cams"] == 1
+    assert train_summary["eval_cam"] == "cam10"
+    assert train_summary["source_audio"] == "near.wav"
+    assert train_summary["joint_steps"] == 2
+    assert train_summary["audio_window_seconds"] == 0.5
+    assert summary["audio_loss_type"] == "audiogs_mono_diff"
     assert checkpoint["stage"] == "joint_finetune"
     assert len(checkpoint["loss_history"]) == 3
     assert checkpoint["config"]["implemented_stages"] == ["audio_warmup", "joint_finetune"]
+    assert checkpoint["config"]["audio_loss_type"] == "audiogs_mono_diff"
+    assert checkpoint["config"]["audio_bandpass"]["low_hz"] == pytest.approx(150.0)
 
 
 def test_build_model_clamps_top_k_to_available_gaussians(monkeypatch, tmp_path):

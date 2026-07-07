@@ -2,12 +2,16 @@ from __future__ import annotations
 
 from torch import Tensor, nn
 
-from avfusion.joint.audio_head import JointAudioHead, SpectralJointAudioHead
+from avfusion.joint.audio_head import AudioGSMaskedSpectralHead, JointAudioHead, SpectralJointAudioHead
 from avfusion.joint.ftgspp_bridge import FTGSRendererBridge
 
 
 class JointAVGaussianModel(nn.Module):
-    def __init__(self, bridge: FTGSRendererBridge, audio_head: JointAudioHead | SpectralJointAudioHead):
+    def __init__(
+        self,
+        bridge: FTGSRendererBridge,
+        audio_head: JointAudioHead | SpectralJointAudioHead | AudioGSMaskedSpectralHead,
+    ):
         super().__init__()
         self.bridge = bridge
         self.shared_gaussians = bridge.gaussians

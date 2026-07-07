@@ -5,9 +5,69 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 import torch
+from scipy.signal import butter, sosfiltfilt
 from torch.utils.data import Dataset
 
 from avfusion.data.manifest import SceneManifest
+
+
+def _apply_audiogs_bandpass(
+    audio: torch.Tensor,
+    sample_rate: int,
+    low_hz: float,
+    high_hz: float,
+    order: int = 5,
+) -> torch.Tensor:
+    low_hz = float(low_hz)
+    high_hz = float(high_hz)
+    order = int(order)
+    if order <= 0:
+        raise ValueError(f"bandpass order must be positive, got {order}")
+    nyquist = 0.5 * float(sample_rate)
+    if high_hz <= 0:
+        high_hz = nyquist - 1.0
+    low_hz = max(0.0, low_hz)
+    high_hz = min(float(high_hz), nyquist)
+    if low_hz <= 0.0 and high_hz >= nyquist:
+        return audio
+    if low_hz >= high_hz:
+        raise ValueError(f"invalid bandpass range: low_hz={low_hz}, high_hz={high_hz}")
+    sos = butter(
+        order,
+        [low_hz / nyquist, high_hz / nyquist],
+        analog=False,
+        btype="band",
+        output="sos",
+    )
+    audio_np = audio.detach().cpu().numpy()
+    filtered = sosfiltfilt(sos, audio_np, axis=-1).copy()
+    return torch.as_tensor(filtered, dtype=audio.dtype, device=audio.device)
+
+
+def _apply_frequency_bandpass(
+    audio: torch.Tensor,
+    sample_rate: int,
+    low_hz: float,
+    high_hz: float,
+    order: int = 5,
+) -> torch.Tensor:
+    return _apply_audiogs_bandpass(audio, sample_rate, low_hz, high_hz, order=order)
+
+
+def _maybe_bandpass_audio(
+    audio: torch.Tensor,
+    sample_rate: int,
+    bandpass: dict[str, float | bool] | None,
+) -> torch.Tensor:
+    if not bandpass or not bool(bandpass.get("enable", False)):
+        return audio
+    return _apply_frequency_bandpass(
+        audio,
+        sample_rate=sample_rate,
+        low_hz=float(bandpass.get("low_hz", 150.0)),
+        high_hz=float(bandpass.get("high_hz", -1.0)),
+        order=int(bandpass.get("order", 5)),
+    )
 
 
 def _read_audio_crop(
@@ -15,6 +75,7 @@ def _read_audio_crop(
     crop_samples: int,
     sample_rate: int,
     channels: int,
+    bandpass: dict[str, float | bool] | None = None,
 ) -> torch.Tensor:
     audio, actual_sample_rate = sf.read(path, always_2d=True, dtype="float32")
     if int(actual_sample_rate) != int(sample_rate):
@@ -34,10 +95,15 @@ def _read_audio_crop(
     if audio.shape[1] != 2:
         raise ValueError(f"expected mono or stereo audio for {path}, got {audio.shape[1]}")
     audio = audio[:crop_samples, :]
-    return torch.from_numpy(audio.T.copy())
+    return _maybe_bandpass_audio(torch.from_numpy(audio.T.copy()), sample_rate, bandpass)
 
 
-def _read_audio_full(path: str, sample_rate: int, channels: int) -> torch.Tensor:
+def _read_audio_full(
+    path: str,
+    sample_rate: int,
+    channels: int,
+    bandpass: dict[str, float | bool] | None = None,
+) -> torch.Tensor:
     audio, actual_sample_rate = sf.read(path, always_2d=True, dtype="float32")
     if int(actual_sample_rate) != int(sample_rate):
         raise ValueError(
@@ -52,7 +118,7 @@ def _read_audio_full(path: str, sample_rate: int, channels: int) -> torch.Tensor
         audio = np.repeat(audio, 2, axis=1)
     if audio.shape[1] != 2:
         raise ValueError(f"expected mono or stereo audio for {path}, got {audio.shape[1]}")
-    return torch.from_numpy(audio.T.copy())
+    return _maybe_bandpass_audio(torch.from_numpy(audio.T.copy()), sample_rate, bandpass)
 
 
 def _crop_with_padding(audio: torch.Tensor, start_sample: int, crop_samples: int) -> torch.Tensor:
@@ -69,11 +135,17 @@ def _crop_with_padding(audio: torch.Tensor, start_sample: int, crop_samples: int
 
 
 class AudioCropDataset(Dataset):
-    def __init__(self, manifest_path: str | Path, split: str):
+    def __init__(
+        self,
+        manifest_path: str | Path,
+        split: str,
+        bandpass: dict[str, float | bool] | None = None,
+    ):
         self.manifest = SceneManifest.load(manifest_path)
         if split not in {"train", "eval"}:
             raise ValueError(f"split must be train or eval, got {split!r}")
         self.split = split
+        self.bandpass = dict(bandpass or {})
         self.camera_names = (
             self.manifest.train_cameras
             if split == "train"
@@ -84,6 +156,7 @@ class AudioCropDataset(Dataset):
             self.manifest.audio.crop_samples,
             self.manifest.audio.sample_rate,
             self.manifest.audio.channels,
+            self.bandpass,
         )
 
     def __len__(self) -> int:
@@ -101,6 +174,7 @@ class AudioCropDataset(Dataset):
                 crop_samples,
                 self.manifest.audio.sample_rate,
                 self.manifest.audio.channels,
+                self.bandpass,
             ),
         }
 
@@ -113,6 +187,7 @@ class TimedAudioCropper:
         mode: str = "center",
         allow_padding: bool = True,
         min_samples: int = 512,
+        bandpass: dict[str, float | bool] | None = None,
     ):
         self.manifest = SceneManifest.load(manifest_path)
         if mode != "center":
@@ -122,6 +197,7 @@ class TimedAudioCropper:
         if self.crop_seconds <= 0:
             raise ValueError(f"crop_seconds must be positive, got {self.crop_seconds}")
         self.allow_padding = bool(allow_padding)
+        self.bandpass = dict(bandpass or {})
         self.sample_rate = int(self.manifest.audio.sample_rate)
         self.crop_samples = max(1, int(round(self.crop_seconds * self.sample_rate)))
         if self.crop_samples < int(min_samples):
@@ -174,5 +250,6 @@ class TimedAudioCropper:
                 path,
                 self.manifest.audio.sample_rate,
                 self.manifest.audio.channels,
+                self.bandpass,
             )
         return self._audio_cache[path]

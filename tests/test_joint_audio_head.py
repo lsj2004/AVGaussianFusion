@@ -1,6 +1,10 @@
 import torch
 
-from avfusion.joint.audio_head import JointAudioHead, SpectralJointAudioHead
+from avfusion.joint.audio_head import (
+    AudioGSMaskedSpectralHead,
+    JointAudioHead,
+    SpectralJointAudioHead,
+)
 
 
 def _state(num_points=5):
@@ -107,6 +111,58 @@ def test_spectral_joint_audio_head_backpropagates_to_masks_and_geometry():
     _assert_nonzero_grad(head.mono_mask)
     _assert_nonzero_grad(head.diff_mask)
     _assert_nonzero_grad(head.distance_logit)
+    assert state["xyz"].grad is not None
+    assert state["xyz"].grad.abs().sum() > 0
+    assert state["opacity"].grad is not None
+    assert state["opacity"].grad.abs().sum() > 0
+    assert state["velocity"].grad is not None
+    assert state["velocity"].grad.abs().sum() > 0
+
+
+def test_audiogs_masked_spectral_head_outputs_stereo_audio():
+    head = AudioGSMaskedSpectralHead(num_points=5, num_frequency_bins=257, top_k=3)
+    source = torch.randn(2, 2048)
+
+    pred = head(_state(), source)
+
+    assert pred.shape == (2, 2048)
+    assert torch.isfinite(pred).all()
+    assert head.active_count == 3
+
+
+def test_audiogs_masked_spectral_head_uses_degree3_sh_basis_by_default():
+    head = AudioGSMaskedSpectralHead(num_points=5, num_frequency_bins=257)
+
+    assert head.sh_degree == 3
+    assert head.sh_basis_dim == 16
+    assert head.mono_sh.shape == (5, 257, 16)
+    assert head.diff_sh.shape == (5, 257, 16)
+
+
+def test_audiogs_masked_spectral_head_only_allocates_audio_params_for_top_k_carrier():
+    head = AudioGSMaskedSpectralHead(num_points=100, num_frequency_bins=257, top_k=7)
+
+    assert head.active_count == 7
+    assert head.audio_opacity.shape == (7, 1)
+    assert head.rotation.shape == (7, 3)
+    assert head.freq_atten_logit.shape == (7, 257)
+    assert head.mono_sh.shape == (7, 257, 16)
+    assert head.diff_sh.shape == (7, 257, 16)
+
+
+def test_audiogs_masked_spectral_head_backpropagates_to_sh_masks_and_geometry():
+    head = AudioGSMaskedSpectralHead(num_points=5, num_frequency_bins=257, top_k=4)
+    state = _state()
+    source = torch.randn(2, 2048)
+
+    loss = head(state, source).pow(2).mean()
+    loss.backward()
+
+    _assert_nonzero_grad(head.audio_opacity)
+    _assert_nonzero_grad(head.mono_sh)
+    _assert_nonzero_grad(head.diff_sh)
+    _assert_nonzero_grad(head.freq_atten_logit)
+    _assert_nonzero_grad(head.rotation)
     assert state["xyz"].grad is not None
     assert state["xyz"].grad.abs().sum() > 0
     assert state["opacity"].grad is not None
