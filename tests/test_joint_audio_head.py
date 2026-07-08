@@ -145,16 +145,63 @@ def test_audiogs_masked_spectral_head_only_allocates_audio_params_for_top_k_carr
 
     assert head.active_count == 7
     assert head.audio_opacity.shape == (7, 1)
-    assert head.rotation.shape == (7, 3)
+    assert head.rotation.shape == (7, 4)
     assert head.freq_atten_logit.shape == (7, 257)
     assert head.mono_sh.shape == (7, 257, 16)
     assert head.diff_sh.shape == (7, 257, 16)
 
 
+def test_audiogs_masked_spectral_head_initializes_identity_point_quaternions():
+    head = AudioGSMaskedSpectralHead(num_points=5, num_frequency_bins=257, top_k=3)
+
+    assert head.rotation[:, 0].tolist() == pytest.approx([1.0, 1.0, 1.0])
+    assert head.rotation[:, 1:].abs().sum().item() == pytest.approx(0.0)
+
+
+def test_audiogs_masked_spectral_head_uses_standard_sh_constants():
+    head = AudioGSMaskedSpectralHead(num_points=5, num_frequency_bins=257, top_k=3)
+    xyz = torch.tensor([[0.0, 0.0, 1.0]])
+    rotation = torch.tensor([[1.0, 0.0, 0.0, 0.0]])
+
+    features, _ = head._direction_features(xyz, rotation)
+
+    assert features.shape == (1, 16)
+    assert features[0, 0].item() == pytest.approx(0.28209479177387814)
+    assert features[0, 1].item() == pytest.approx(0.0)
+    assert features[0, 2].item() == pytest.approx(0.4886025119029199)
+    assert features[0, 6].item() == pytest.approx(0.6307831305050401)
+    assert features[0, 12].item() == pytest.approx(0.7463526651802308)
+
+
+def test_audiogs_masked_spectral_head_rotates_directions_into_point_local_frame():
+    head = AudioGSMaskedSpectralHead(num_points=5, num_frequency_bins=257, top_k=3)
+    xyz = torch.tensor([[1.0, 0.0, 0.0]])
+    sqrt_half = 2.0**-0.5
+    local_rot_z90 = torch.tensor([[sqrt_half, 0.0, 0.0, sqrt_half]])
+
+    features, _ = head._direction_features(xyz, local_rot_z90)
+
+    assert features[0, 1].item() == pytest.approx(-0.4886025119029199)
+    assert features[0, 2].item() == pytest.approx(0.0)
+    assert features[0, 3].item() == pytest.approx(0.0, abs=1e-6)
+
+
+def test_audiogs_masked_spectral_head_loads_legacy_three_vector_rotation_state():
+    head = AudioGSMaskedSpectralHead(num_points=5, num_frequency_bins=257, top_k=3)
+    state_dict = head.state_dict()
+    state_dict["rotation"] = torch.zeros(3, 3)
+
+    head.load_state_dict(state_dict)
+
+    assert head.rotation.shape == (3, 4)
+    assert head.rotation[:, 0].tolist() == pytest.approx([1.0, 1.0, 1.0])
+    assert head.rotation[:, 1:].abs().sum().item() == pytest.approx(0.0)
+
+
 def test_audiogs_masked_spectral_head_uses_camera_frame_direction_features():
     head = AudioGSMaskedSpectralHead(num_points=5, num_frequency_bins=257, top_k=3)
     xyz = torch.tensor([[1.0, 0.0, 0.0]])
-    rotation = torch.zeros(1, 3)
+    rotation = torch.tensor([[1.0, 0.0, 0.0, 0.0]])
     identity_w2c = torch.eye(4).reshape(1, 4, 4)
     rot_z_w2c = torch.tensor(
         [
@@ -180,8 +227,8 @@ def test_audiogs_masked_spectral_head_uses_camera_frame_direction_features():
 
     assert identity_distance.item() == pytest.approx(1.0)
     assert rotated_distance.item() == pytest.approx(1.0)
-    assert identity_features[0, 1:4].tolist() == pytest.approx([1.0, 0.0, 0.0])
-    assert rotated_features[0, 1:4].tolist() == pytest.approx([0.0, 1.0, 0.0])
+    assert identity_features[0, 1:4].tolist() == pytest.approx([0.0, 0.0, -0.4886025119029199])
+    assert rotated_features[0, 1:4].tolist() == pytest.approx([-0.4886025119029199, 0.0, 0.0])
 
 
 def test_audiogs_masked_spectral_head_backpropagates_to_sh_masks_and_geometry():

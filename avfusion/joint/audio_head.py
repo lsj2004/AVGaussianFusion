@@ -4,6 +4,25 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
+SH_C0 = 0.28209479177387814
+SH_C1 = 0.4886025119029199
+SH_C2 = (
+    1.0925484305920792,
+    -1.0925484305920792,
+    0.31539156525252005,
+    -1.0925484305920792,
+    0.5462742152960396,
+)
+SH_C3 = (
+    -0.5900435899266435,
+    2.890611442640554,
+    -0.4570457994644658,
+    0.3731763325901154,
+    -0.4570457994644658,
+    1.445305721320277,
+    -0.5900435899266435,
+)
+
 
 class JointAudioHead(nn.Module):
     def __init__(self, num_points: int, top_k: int | None = None):
@@ -253,7 +272,9 @@ class AudioGSMaskedSpectralHead(nn.Module):
         self.register_buffer("carrier_indices", carrier_indices, persistent=True)
 
         self.audio_opacity = nn.Parameter(torch.zeros(self.top_k, 1))
-        self.rotation = nn.Parameter(torch.zeros(self.top_k, 3))
+        rotation_init = torch.zeros(self.top_k, 4)
+        rotation_init[:, 0] = 1.0
+        self.rotation = nn.Parameter(rotation_init)
         self.freq_atten_logit = nn.Parameter(torch.zeros(self.top_k, num_frequency_bins))
         self.velocity_scale = nn.Parameter(torch.zeros(self.top_k, 1))
         self.mono_bias = nn.Parameter(torch.zeros(num_frequency_bins))
@@ -268,6 +289,31 @@ class AudioGSMaskedSpectralHead(nn.Module):
     @property
     def active_count(self) -> int:
         return self.top_k
+
+    @staticmethod
+    def _axis_angle_to_quaternion(axis_angle: Tensor) -> Tensor:
+        angle = axis_angle.norm(dim=-1, keepdim=True)
+        half_angle = 0.5 * angle
+        small = angle < 1e-8
+        scale = torch.where(
+            small,
+            0.5 - angle.square() / 48.0,
+            torch.sin(half_angle) / angle.clamp_min(1e-8),
+        )
+        return torch.cat([torch.cos(half_angle), axis_angle * scale], dim=-1)
+
+    @staticmethod
+    def _normalize_quaternion(quaternion: Tensor) -> Tensor:
+        return F.normalize(quaternion, dim=-1, eps=1e-8)
+
+    @classmethod
+    def _rotate_by_quaternion(cls, vector: Tensor, quaternion: Tensor) -> Tensor:
+        q = cls._normalize_quaternion(quaternion)
+        q_w = q[..., :1]
+        q_xyz = q[..., 1:]
+        uv = torch.cross(q_xyz, vector, dim=-1)
+        uuv = torch.cross(q_xyz, uv, dim=-1)
+        return vector + 2.0 * (q_w * uv + uuv)
 
     @staticmethod
     def _world_to_camera_xyz(xyz: Tensor, camera_w2c: Tensor | None) -> Tensor:
@@ -287,6 +333,34 @@ class AudioGSMaskedSpectralHead(nn.Module):
         translation = w2c[:3, 3]
         return xyz @ rotation.T + translation.reshape(1, 3)
 
+    def _sh_features(self, direction: Tensor) -> Tensor:
+        x, y, z = direction.unbind(dim=-1)
+        features = [
+            torch.full_like(x, SH_C0),
+            -SH_C1 * y,
+            SH_C1 * z,
+            -SH_C1 * x,
+        ]
+        if self.sh_degree == 1:
+            return torch.stack(features, dim=-1)
+        features.extend(
+            [
+                SH_C2[0] * x * y,
+                SH_C2[1] * y * z,
+                SH_C2[2] * (2.0 * z.square() - x.square() - y.square()),
+                SH_C2[3] * x * z,
+                SH_C2[4] * (x.square() - y.square()),
+                SH_C3[0] * y * (3.0 * x.square() - y.square()),
+                SH_C3[1] * x * y * z,
+                SH_C3[2] * y * (4.0 * z.square() - x.square() - y.square()),
+                SH_C3[3] * z * (2.0 * z.square() - 3.0 * x.square() - 3.0 * y.square()),
+                SH_C3[4] * x * (4.0 * z.square() - x.square() - y.square()),
+                SH_C3[5] * z * (x.square() - y.square()),
+                SH_C3[6] * x * (x.square() - 3.0 * y.square()),
+            ]
+        )
+        return torch.stack(features, dim=-1)
+
     def _direction_features(
         self,
         xyz: Tensor,
@@ -294,33 +368,41 @@ class AudioGSMaskedSpectralHead(nn.Module):
         camera_w2c: Tensor | None = None,
     ) -> tuple[Tensor, Tensor]:
         camera_xyz = self._world_to_camera_xyz(xyz, camera_w2c)
-        direction = F.normalize(camera_xyz + torch.tanh(rotation), dim=-1, eps=1e-6)
-        ones = torch.ones(direction.shape[0], 1, device=xyz.device, dtype=xyz.dtype)
-        x, y, z = direction.unbind(dim=-1)
-        degree1 = [ones.reshape(-1), x, y, z]
-        if self.sh_degree == 1:
-            features = torch.stack(degree1, dim=-1)
-        else:
-            features = torch.stack(
-                [
-                    *degree1,
-                    x * y,
-                    y * z,
-                    2.0 * z.square() - x.square() - y.square(),
-                    x * z,
-                    x.square() - y.square(),
-                    y * (3.0 * x.square() - y.square()),
-                    x * y * z,
-                    y * (4.0 * z.square() - x.square() - y.square()),
-                    z * (2.0 * z.square() - 3.0 * x.square() - 3.0 * y.square()),
-                    x * (4.0 * z.square() - x.square() - y.square()),
-                    z * (x.square() - y.square()),
-                    x * (x.square() - 3.0 * y.square()),
-                ],
-                dim=-1,
-            )
+        camera_direction = F.normalize(camera_xyz, dim=-1, eps=1e-6)
+        local_direction = F.normalize(
+            self._rotate_by_quaternion(camera_direction, rotation),
+            dim=-1,
+            eps=1e-6,
+        )
+        features = self._sh_features(local_direction)
         distance = camera_xyz.norm(dim=-1, keepdim=True).clamp_min(1e-4)
         return features, distance
+
+    def _load_from_state_dict(
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ) -> None:
+        rotation_key = prefix + "rotation"
+        if rotation_key in state_dict:
+            rotation = state_dict[rotation_key]
+            if isinstance(rotation, torch.Tensor) and rotation.ndim == 2 and rotation.shape[-1] == 3:
+                state_dict = dict(state_dict)
+                state_dict[rotation_key] = self._axis_angle_to_quaternion(torch.tanh(rotation))
+        super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
 
     @staticmethod
     def combine_mono_diff_magnitudes(
