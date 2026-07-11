@@ -28,6 +28,13 @@ def _metric(row: dict, key: str) -> str:
     return str(value)
 
 
+def _first_metric(row: dict, *keys: str):
+    for key in keys:
+        if key in row:
+            return row.get(key)
+    return None
+
+
 def main() -> None:
     rows = []
     for dataset, run_dir in RUNS.items():
@@ -48,9 +55,9 @@ def main() -> None:
                 "DPAM_error": audio.get("DPAM_error"),
                 "RTE": audio.get("RTE"),
                 "RTE_available": audio.get("RTE_available"),
-                "PSNR": visual.get("psnr"),
-                "MSE": visual.get("mse"),
-                "L1": visual.get("l1"),
+                "PSNR": _first_metric(visual, "PSNR", "psnr"),
+                "MSE": _first_metric(visual, "MSE", "mse"),
+                "L1": _first_metric(visual, "L1", "l1"),
                 "audio_summary": str(run_dir / "eval" / "audio_summary.json"),
                 "visual_summary": str(run_dir / "eval" / "visual_summary.json"),
             }
