@@ -29,6 +29,11 @@ losses:
   audio_diff_weight: 0.5
   audio_use_log_mag_loss: false
   audio_lre_loss_weight: 0.075
+  audio_phase_loss_weight: 0.05
+  audio_mr_stft_scales:
+    - [256, 64, 256]
+    - [512, 160, 400]
+    - [1024, 320, 800]
   audio_bandpass:
     enable: true
     low_hz: 150.0

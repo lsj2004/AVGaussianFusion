@@ -3,7 +3,7 @@ import torch
 
 from avfusion.adapters.visual_to_acoustic import AcousticCarrier
 from avfusion.audio.acoustic_gaussians import AcousticGaussianParameters
-from avfusion.audio.losses import stft_magnitude_loss
+from avfusion.audio.losses import audiogs_mono_diff_loss, stft_magnitude_loss
 from avfusion.audio.renderer import render_audio
 
 
@@ -79,3 +79,21 @@ def test_stft_magnitude_loss_rejects_short_audio():
 
     with pytest.raises(ValueError, match="shorter than n_fft"):
         stft_magnitude_loss(pred, target, n_fft=512)
+
+
+def test_audiogs_mono_diff_loss_supports_mr_stft_and_phase_loss():
+    pred = torch.randn(2, 4096, requires_grad=True)
+    target = torch.randn(2, 4096)
+
+    loss = audiogs_mono_diff_loss(
+        pred,
+        target,
+        mr_stft_scales=((256, 64, 256), (512, 160, 400)),
+        phase_loss_weight=0.05,
+    )
+
+    assert loss.ndim == 0
+    assert torch.isfinite(loss)
+    loss.backward()
+    assert pred.grad is not None
+    assert pred.grad.abs().sum() > 0

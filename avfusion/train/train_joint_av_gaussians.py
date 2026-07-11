@@ -42,6 +42,8 @@ class TrainingConfig:
     audio_diff_weight: float
     audio_use_log_mag_loss: bool
     audio_lre_loss_weight: float
+    audio_phase_loss_weight: float
+    audio_mr_stft_scales: tuple[tuple[int, int, int], ...] | None
     audio_bandpass: dict[str, float | bool]
     config: str | None = None
 
@@ -122,6 +124,26 @@ def _require_value(value: Any, name: str) -> Any:
     return value
 
 
+def _parse_mr_stft_scales(value: Any) -> tuple[tuple[int, int, int], ...] | None:
+    if value in (None, "", False):
+        return None
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("losses.audio_mr_stft_scales must be a list of [n_fft, hop_length, win_length]")
+    scales = []
+    for scale in value:
+        if not isinstance(scale, (list, tuple)) or len(scale) != 3:
+            raise ValueError(
+                "each losses.audio_mr_stft_scales entry must be [n_fft, hop_length, win_length]"
+            )
+        n_fft, hop_length, win_length = (int(scale[0]), int(scale[1]), int(scale[2]))
+        if n_fft <= 0 or hop_length <= 0 or win_length <= 0:
+            raise ValueError("losses.audio_mr_stft_scales values must be positive")
+        if win_length > n_fft:
+            raise ValueError("losses.audio_mr_stft_scales win_length cannot exceed n_fft")
+        scales.append((n_fft, hop_length, win_length))
+    return tuple(scales)
+
+
 def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
     config = _load_yaml_config(args.config)
 
@@ -166,6 +188,10 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
     audio_lre_loss_weight = args.audio_lre_loss_weight
     if audio_lre_loss_weight is None:
         audio_lre_loss_weight = _config_loss_value(config, "audio_lre_loss_weight", 0.0)
+    audio_phase_loss_weight = _config_loss_value(config, "audio_phase_loss_weight", 0.0)
+    audio_mr_stft_scales = _parse_mr_stft_scales(
+        _config_loss_value(config, "audio_mr_stft_scales", None)
+    )
     audio_bandpass = _config_loss_value(config, "audio_bandpass", {})
     if not isinstance(audio_bandpass, dict):
         raise ValueError("losses.audio_bandpass must be a mapping when provided")
@@ -189,6 +215,9 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
     audio_diff_weight = float(_require_value(audio_diff_weight, "losses.audio_diff_weight"))
     audio_lre_loss_weight = float(
         _require_value(audio_lre_loss_weight, "losses.audio_lre_loss_weight")
+    )
+    audio_phase_loss_weight = float(
+        _require_value(audio_phase_loss_weight, "losses.audio_phase_loss_weight")
     )
     if warmup_steps < 0:
         raise ValueError(f"train.warmup_steps must be nonnegative, got {warmup_steps}")
@@ -228,6 +257,10 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
         raise ValueError(
             f"losses.audio_lre_loss_weight must be nonnegative, got {audio_lre_loss_weight}"
         )
+    if audio_phase_loss_weight < 0:
+        raise ValueError(
+            f"losses.audio_phase_loss_weight must be nonnegative, got {audio_phase_loss_weight}"
+        )
 
     return TrainingConfig(
         manifest=str(_require_value(manifest, "paths.manifest")),
@@ -249,6 +282,8 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
         audio_diff_weight=audio_diff_weight,
         audio_use_log_mag_loss=audio_use_log_mag_loss,
         audio_lre_loss_weight=audio_lre_loss_weight,
+        audio_phase_loss_weight=audio_phase_loss_weight,
+        audio_mr_stft_scales=audio_mr_stft_scales,
         audio_bandpass=dict(audio_bandpass),
         config=args.config,
     )
@@ -261,6 +296,8 @@ def compute_audio_training_loss(
     diff_weight: float = 2.0,
     use_log_mag_loss: bool = False,
     lre_loss_weight: float = 0.0,
+    phase_loss_weight: float = 0.0,
+    mr_stft_scales: tuple[tuple[int, int, int], ...] | None = None,
 ) -> torch.Tensor:
     if loss_type == "stft_log_l1":
         return stft_magnitude_loss(pred, target)
@@ -271,8 +308,20 @@ def compute_audio_training_loss(
             diff_weight=diff_weight,
             use_log_mag_loss=use_log_mag_loss,
             lre_loss_weight=lre_loss_weight,
+            phase_loss_weight=phase_loss_weight,
+            mr_stft_scales=mr_stft_scales,
         )
     raise ValueError(f"unknown audio loss type {loss_type!r}")
+
+
+def _parameter_grad_norm(parameters) -> float:
+    total = 0.0
+    for parameter in parameters:
+        if parameter.grad is None:
+            continue
+        grad = parameter.grad.detach()
+        total += float(grad.float().pow(2).sum().cpu().item())
+    return float(total ** 0.5)
 
 
 def build_model(
@@ -408,6 +457,8 @@ def train_audio_warmup(
     audio_diff_weight: float = 2.0,
     audio_use_log_mag_loss: bool = False,
     audio_lre_loss_weight: float = 0.0,
+    audio_phase_loss_weight: float = 0.0,
+    audio_mr_stft_scales: tuple[tuple[int, int, int], ...] | None = None,
     audio_bandpass: dict[str, float | bool] | None = None,
 ) -> list[float]:
     if steps <= 0:
@@ -434,6 +485,8 @@ def train_audio_warmup(
             diff_weight=audio_diff_weight,
             use_log_mag_loss=audio_use_log_mag_loss,
             lre_loss_weight=audio_lre_loss_weight,
+            phase_loss_weight=audio_phase_loss_weight,
+            mr_stft_scales=audio_mr_stft_scales,
         )
         loss.backward()
         optimizer.step()
@@ -457,6 +510,8 @@ def train_joint_finetune(
     audio_diff_weight: float = 2.0,
     audio_use_log_mag_loss: bool = False,
     audio_lre_loss_weight: float = 0.0,
+    audio_phase_loss_weight: float = 0.0,
+    audio_mr_stft_scales: tuple[tuple[int, int, int], ...] | None = None,
     audio_bandpass: dict[str, float | bool] | None = None,
     ftgspp_memmap: str | Path | None = None,
     frame_reader: FrameReader | None = None,
@@ -543,6 +598,8 @@ def train_joint_finetune(
             diff_weight=audio_diff_weight,
             use_log_mag_loss=audio_use_log_mag_loss,
             lre_loss_weight=audio_lre_loss_weight,
+            phase_loss_weight=audio_phase_loss_weight,
+            mr_stft_scales=audio_mr_stft_scales,
         )
         rgb_loss = audio_loss.new_zeros(())
         if visual_sample is not None:
@@ -558,6 +615,8 @@ def train_joint_finetune(
             + float(geometry_reg_weight) * geo_loss
         )
         total.backward()
+        shared_grad_norm = _parameter_grad_norm(model.shared_gaussians.parameters())
+        audio_grad_norm = _parameter_grad_norm(model.audio_head.parameters())
         optimizer.step()
         loss_history.append(
             {
@@ -565,6 +624,8 @@ def train_joint_finetune(
                 "rgb": float(rgb_loss.detach().cpu().item()),
                 "audio": float(audio_loss.detach().cpu().item()),
                 "geo": float(geo_loss.detach().cpu().item()),
+                "shared_grad_norm": shared_grad_norm,
+                "audio_grad_norm": audio_grad_norm,
                 "camera": str(visual_sample["camera"]) if visual_sample is not None else str(audio_sample.get("camera", "")),
                 "frame": int(visual_sample["frame"]) if visual_sample is not None else -1,
                 "time": float(render_time.detach().cpu().reshape(-1)[0].item()),
@@ -594,6 +655,8 @@ def train_and_save(
     audio_diff_weight: float = 2.0,
     audio_use_log_mag_loss: bool = False,
     audio_lre_loss_weight: float = 0.0,
+    audio_phase_loss_weight: float = 0.0,
+    audio_mr_stft_scales: tuple[tuple[int, int, int], ...] | None = None,
     audio_bandpass: dict[str, float | bool] | None = None,
     ftgspp_memmap: str | Path | None = None,
     config_path: str | Path | None = None,
@@ -611,6 +674,8 @@ def train_and_save(
         audio_diff_weight=audio_diff_weight,
         audio_use_log_mag_loss=audio_use_log_mag_loss,
         audio_lre_loss_weight=audio_lre_loss_weight,
+        audio_phase_loss_weight=audio_phase_loss_weight,
+        audio_mr_stft_scales=audio_mr_stft_scales,
         audio_bandpass=audio_bandpass,
     )
     joint_loss_history = train_joint_finetune(
@@ -628,6 +693,8 @@ def train_and_save(
         audio_diff_weight=audio_diff_weight,
         audio_use_log_mag_loss=audio_use_log_mag_loss,
         audio_lre_loss_weight=audio_lre_loss_weight,
+        audio_phase_loss_weight=audio_phase_loss_weight,
+        audio_mr_stft_scales=audio_mr_stft_scales,
         audio_bandpass=audio_bandpass,
         ftgspp_memmap=ftgspp_memmap,
         frame_reader=frame_reader,
@@ -662,6 +729,10 @@ def train_and_save(
         "audio_diff_weight": float(audio_diff_weight),
         "audio_use_log_mag_loss": bool(audio_use_log_mag_loss),
         "audio_lre_loss_weight": float(audio_lre_loss_weight),
+        "audio_phase_loss_weight": float(audio_phase_loss_weight),
+        "audio_mr_stft_scales": [list(scale) for scale in audio_mr_stft_scales]
+        if audio_mr_stft_scales is not None
+        else None,
         "audio_bandpass": dict(audio_bandpass or {}),
         "config": str(config_path) if config_path is not None else None,
         "implemented_stages": implemented_stages,
@@ -725,6 +796,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         audio_diff_weight=config.audio_diff_weight,
         audio_use_log_mag_loss=config.audio_use_log_mag_loss,
         audio_lre_loss_weight=config.audio_lre_loss_weight,
+        audio_phase_loss_weight=config.audio_phase_loss_weight,
+        audio_mr_stft_scales=config.audio_mr_stft_scales,
         audio_bandpass=config.audio_bandpass,
         ftgspp_memmap=config.ftgspp_memmap,
         config_path=config.config,

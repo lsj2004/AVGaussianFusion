@@ -72,6 +72,10 @@ def test_config_file_populates_route_b_training_args(tmp_path):
                 "  audio_diff_weight: 2.0",
                 "  audio_use_log_mag_loss: false",
                 "  audio_lre_loss_weight: 0.0",
+                "  audio_phase_loss_weight: 0.05",
+                "  audio_mr_stft_scales:",
+                "    - [256, 64, 256]",
+                "    - [512, 160, 400]",
                 "  audio_bandpass:",
                 "    enable: true",
                 "    low_hz: 150.0",
@@ -99,6 +103,8 @@ def test_config_file_populates_route_b_training_args(tmp_path):
     assert cfg.audio_diff_weight == pytest.approx(2.0)
     assert cfg.audio_use_log_mag_loss is False
     assert cfg.audio_lre_loss_weight == pytest.approx(0.0)
+    assert cfg.audio_phase_loss_weight == pytest.approx(0.05)
+    assert cfg.audio_mr_stft_scales == ((256, 64, 256), (512, 160, 400))
     assert cfg.audio_bandpass == {
         "enable": True,
         "low_hz": 150.0,
@@ -323,6 +329,7 @@ def test_train_joint_finetune_updates_shared_geometry_and_audio_head(tmp_path):
 
     assert len(losses) == 2
     assert all("total" in row and "rgb" in row and "audio" in row and "geo" in row for row in losses)
+    assert all("audio_grad_norm" in row and "shared_grad_norm" in row for row in losses)
     assert losses[0]["camera"] == "cam00"
     assert losses[0]["frame"] == 8
     assert losses[0]["time"] == pytest.approx(8 / 30)

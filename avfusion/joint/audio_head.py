@@ -221,10 +221,15 @@ class AudioGSMaskedSpectralHead(nn.Module):
         n_fft: int = 512,
         hop_length: int = 160,
         win_length: int = 400,
+        sample_rate: int = 16000,
         sh_rand_init_std: float = 0.1,
         freq_atten_alpha: float = 1.0,
         diff_lr_sign: float = 1.0,
         sh_degree: int = 3,
+        use_geom_phase: bool = True,
+        use_ear_distance_attenuation: bool = True,
+        head_radius: float = 0.0875,
+        sound_speed: float = 343.0,
         carrier_indices: Tensor | None = None,
     ):
         super().__init__()
@@ -236,6 +241,12 @@ class AudioGSMaskedSpectralHead(nn.Module):
             raise ValueError(f"top_k must be at least 2, got {top_k}")
         if n_fft <= 0 or hop_length <= 0 or win_length <= 0:
             raise ValueError("STFT sizes must be positive")
+        if sample_rate <= 0:
+            raise ValueError(f"sample_rate must be positive, got {sample_rate}")
+        if head_radius < 0:
+            raise ValueError(f"head_radius must be nonnegative, got {head_radius}")
+        if sound_speed <= 0:
+            raise ValueError(f"sound_speed must be positive, got {sound_speed}")
         expected_bins = n_fft // 2 + 1
         if int(num_frequency_bins) != expected_bins:
             raise ValueError(
@@ -250,9 +261,14 @@ class AudioGSMaskedSpectralHead(nn.Module):
         self.n_fft = int(n_fft)
         self.hop_length = int(hop_length)
         self.win_length = int(win_length)
+        self.sample_rate = int(sample_rate)
         self.freq_atten_alpha = float(freq_atten_alpha)
         self.diff_lr_sign = float(diff_lr_sign)
         self.sh_degree = int(sh_degree)
+        self.use_geom_phase = bool(use_geom_phase)
+        self.use_ear_distance_attenuation = bool(use_ear_distance_attenuation)
+        self.head_radius = float(head_radius)
+        self.sound_speed = float(sound_speed)
         self.sh_basis_dim = 16 if self.sh_degree == 3 else 4
         if carrier_indices is not None:
             carrier_indices = torch.as_tensor(carrier_indices, dtype=torch.long)
@@ -285,6 +301,13 @@ class AudioGSMaskedSpectralHead(nn.Module):
         self.diff_sh = nn.Parameter(
             torch.randn(self.top_k, num_frequency_bins, self.sh_basis_dim) * float(sh_rand_init_std)
         )
+        self.phase_residual = nn.Parameter(torch.zeros(self.top_k, num_frequency_bins))
+        frequencies = torch.linspace(
+            0.0,
+            0.5 * float(self.sample_rate),
+            self.num_frequency_bins,
+        )
+        self.register_buffer("frequencies_hz", frequencies, persistent=False)
 
     @property
     def active_count(self) -> int:
@@ -378,6 +401,52 @@ class AudioGSMaskedSpectralHead(nn.Module):
         distance = camera_xyz.norm(dim=-1, keepdim=True).clamp_min(1e-4)
         return features, distance
 
+    def _geometry_phase_delta(self, camera_direction: Tensor, weights: Tensor) -> Tensor:
+        if not self.use_geom_phase:
+            return torch.zeros(
+                self.num_frequency_bins,
+                1,
+                device=weights.device,
+                dtype=weights.dtype,
+            )
+        if camera_direction.ndim != 2 or camera_direction.shape[-1] != 3:
+            raise ValueError(f"camera_direction must have shape (points, 3), got {tuple(camera_direction.shape)}")
+        if weights.ndim != 2 or weights.shape[-1] != self.num_frequency_bins:
+            raise ValueError(
+                f"weights must have shape (points, {self.num_frequency_bins}), got {tuple(weights.shape)}"
+            )
+        itd_seconds = float(self.head_radius) * camera_direction[:, 0:1] / float(self.sound_speed)
+        phase_per_point = 2.0 * torch.pi * itd_seconds * self.frequencies_hz.to(weights).reshape(1, -1)
+        phase = (weights * phase_per_point).sum(dim=0)
+        return phase.reshape(-1, 1)
+
+    def _ear_distance_gains(self, camera_xyz: Tensor, weights: Tensor) -> tuple[Tensor, Tensor]:
+        ones = torch.ones(
+            self.num_frequency_bins,
+            1,
+            device=weights.device,
+            dtype=weights.dtype,
+        )
+        if not self.use_ear_distance_attenuation or self.head_radius <= 0:
+            return ones, ones
+        if camera_xyz.ndim != 2 or camera_xyz.shape[-1] != 3:
+            raise ValueError(f"camera_xyz must have shape (points, 3), got {tuple(camera_xyz.shape)}")
+        if weights.ndim != 2 or weights.shape[-1] != self.num_frequency_bins:
+            raise ValueError(
+                f"weights must have shape (points, {self.num_frequency_bins}), got {tuple(weights.shape)}"
+            )
+        left_ear = camera_xyz.new_tensor([self.head_radius, 0.0, 0.0])
+        right_ear = camera_xyz.new_tensor([-self.head_radius, 0.0, 0.0])
+        center_distance = camera_xyz.norm(dim=-1, keepdim=True).clamp_min(1e-4)
+        left_distance = (camera_xyz - left_ear).norm(dim=-1, keepdim=True).clamp_min(1e-4)
+        right_distance = (camera_xyz - right_ear).norm(dim=-1, keepdim=True).clamp_min(1e-4)
+        left_per_point = (center_distance / left_distance).pow(self.freq_atten_alpha)
+        right_per_point = (center_distance / right_distance).pow(self.freq_atten_alpha)
+        left_gain = (weights * left_per_point).sum(dim=0).reshape(-1, 1)
+        right_gain = (weights * right_per_point).sum(dim=0).reshape(-1, 1)
+        mean_gain = (0.5 * (left_gain + right_gain)).clamp_min(1e-6)
+        return left_gain / mean_gain, right_gain / mean_gain
+
     def _load_from_state_dict(
         self,
         state_dict,
@@ -394,6 +463,10 @@ class AudioGSMaskedSpectralHead(nn.Module):
             if isinstance(rotation, torch.Tensor) and rotation.ndim == 2 and rotation.shape[-1] == 3:
                 state_dict = dict(state_dict)
                 state_dict[rotation_key] = self._axis_angle_to_quaternion(torch.tanh(rotation))
+        phase_key = prefix + "phase_residual"
+        if phase_key not in state_dict:
+            state_dict = dict(state_dict)
+            state_dict[phase_key] = self.phase_residual.detach().clone()
         super()._load_from_state_dict(
             state_dict,
             prefix,
@@ -420,7 +493,7 @@ class AudioGSMaskedSpectralHead(nn.Module):
         state: dict[str, Tensor],
         source_magnitude: Tensor,
         camera_w2c: Tensor | None = None,
-    ) -> tuple[Tensor, Tensor]:
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         xyz = state["xyz"]
         opacity = state["opacity"]
         velocity = state["velocity"]
@@ -435,6 +508,8 @@ class AudioGSMaskedSpectralHead(nn.Module):
 
         selected_xyz = xyz.index_select(0, indices)
         selected_rotation = self.rotation.index_select(0, local_indices)
+        camera_xyz = self._world_to_camera_xyz(selected_xyz, camera_w2c)
+        camera_direction = F.normalize(camera_xyz, dim=-1, eps=1e-6)
         features, distance = self._direction_features(
             selected_xyz,
             selected_rotation,
@@ -457,7 +532,18 @@ class AudioGSMaskedSpectralHead(nn.Module):
 
         mono_mask = torch.sigmoid(mono_logits).reshape(-1, 1)
         diff_mask = torch.sigmoid(diff_logits).reshape(-1, 1)
-        return mono_mask.expand_as(source_magnitude), diff_mask.expand_as(source_magnitude)
+        residual_phase = (
+            weights * self.phase_residual.index_select(0, local_indices)
+        ).sum(dim=0).reshape(-1, 1)
+        phase_delta = self._geometry_phase_delta(camera_direction, weights) + residual_phase
+        left_gain, right_gain = self._ear_distance_gains(camera_xyz, weights)
+        return (
+            mono_mask.expand_as(source_magnitude),
+            diff_mask.expand_as(source_magnitude),
+            phase_delta.expand_as(source_magnitude),
+            left_gain.expand_as(source_magnitude),
+            right_gain.expand_as(source_magnitude),
+        )
 
     def forward(
         self,
@@ -494,15 +580,25 @@ class AudioGSMaskedSpectralHead(nn.Module):
         mag_l = spec_l.abs()
         mag_r = spec_r.abs()
         source_magnitude = torch.nan_to_num(0.5 * (mag_l + mag_r), nan=0.0, posinf=0.0, neginf=0.0)
-        mono_mask, diff_mask = self._render_masks(state, source_magnitude, camera_w2c=camera_w2c)
+        mono_mask, diff_mask, phase_delta, left_gain, right_gain = self._render_masks(
+            state,
+            source_magnitude,
+            camera_w2c=camera_w2c,
+        )
         mono_mag = torch.nan_to_num(mono_mask * source_magnitude, nan=0.0, posinf=0.0, neginf=0.0)
         left_mag, right_mag = self.combine_mono_diff_magnitudes(
             mono_mag,
             diff_mask,
             diff_lr_sign=self.diff_lr_sign,
         )
-        left_spec = torch.polar(left_mag, torch.nan_to_num(torch.angle(spec_l), nan=0.0, posinf=0.0, neginf=0.0))
-        right_spec = torch.polar(right_mag, torch.nan_to_num(torch.angle(spec_r), nan=0.0, posinf=0.0, neginf=0.0))
+        mid_phase = torch.nan_to_num(
+            torch.angle(0.5 * (spec_l + spec_r)),
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+        left_spec = torch.polar(left_mag * left_gain, mid_phase + phase_delta)
+        right_spec = torch.polar(right_mag * right_gain, mid_phase - phase_delta)
         left = torch.istft(
             left_spec,
             n_fft=self.n_fft,

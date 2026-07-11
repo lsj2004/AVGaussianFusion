@@ -231,6 +231,50 @@ def test_audiogs_masked_spectral_head_uses_camera_frame_direction_features():
     assert rotated_features[0, 1:4].tolist() == pytest.approx([-0.4886025119029199, 0.0, 0.0])
 
 
+def test_audiogs_masked_spectral_head_computes_geometry_phase_from_itd():
+    head = AudioGSMaskedSpectralHead(
+        num_points=5,
+        num_frequency_bins=257,
+        top_k=3,
+        sample_rate=16000,
+        use_geom_phase=True,
+        head_radius=0.0875,
+        sound_speed=343.0,
+    )
+    directions = torch.tensor([[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0]])
+    weights = torch.ones(2, 257) / 2.0
+
+    phase = head._geometry_phase_delta(directions, weights)
+
+    assert phase.shape == (257, 1)
+    assert phase[0].item() == pytest.approx(0.0)
+    assert phase.abs().max().item() == pytest.approx(0.0, abs=1e-6)
+
+    one_sided = head._geometry_phase_delta(directions[:1], weights[:1])
+    assert one_sided.shape == (257, 1)
+    assert one_sided[32].abs().item() > 0.0
+
+
+def test_audiogs_masked_spectral_head_computes_mirrored_ear_distance_gains():
+    head = AudioGSMaskedSpectralHead(
+        num_points=5,
+        num_frequency_bins=257,
+        top_k=3,
+        head_radius=0.1,
+        use_ear_distance_attenuation=True,
+    )
+    camera_xyz = torch.tensor([[1.0, 0.0, 0.0]])
+    weights = torch.ones(1, 257)
+
+    left_gain, right_gain = head._ear_distance_gains(camera_xyz, weights)
+    mirrored_left_gain, mirrored_right_gain = head._ear_distance_gains(-camera_xyz, weights)
+
+    assert left_gain.shape == (257, 1)
+    assert right_gain.shape == (257, 1)
+    assert left_gain.mean().item() > right_gain.mean().item()
+    assert mirrored_right_gain.mean().item() > mirrored_left_gain.mean().item()
+
+
 def test_audiogs_masked_spectral_head_backpropagates_to_sh_masks_and_geometry():
     head = AudioGSMaskedSpectralHead(num_points=5, num_frequency_bins=257, top_k=4)
     state = _state()
