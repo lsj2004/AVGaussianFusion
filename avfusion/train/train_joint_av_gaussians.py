@@ -39,6 +39,7 @@ class TrainingConfig:
     audio_window_seconds: float
     audio_crop_mode: str
     audio_head_type: str
+    audio_renderer_type: str
     audio_loss_type: str
     audio_diff_weight: float
     audio_use_log_mag_loss: bool
@@ -80,6 +81,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--audio-window-seconds", type=float)
     parser.add_argument("--audio-crop-mode", choices=["center", "start"])
     parser.add_argument("--audio-head-type", choices=["simple", "spectral", "audiogs"])
+    parser.add_argument("--audio-renderer-type", choices=["direct", "unet"])
     parser.add_argument("--audio-loss-type", choices=["stft_log_l1", "audiogs_mono_diff"])
     parser.add_argument("--audio-diff-weight", type=float)
     parser.add_argument("--audio-use-log-mag-loss", action="store_true")
@@ -181,6 +183,9 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
     audio_head_type = args.audio_head_type
     if audio_head_type is None:
         audio_head_type = _config_train_value(config, "audio_head_type", "simple")
+    audio_renderer_type = args.audio_renderer_type
+    if audio_renderer_type is None:
+        audio_renderer_type = _config_train_value(config, "audio_renderer_type", "direct")
     audio_loss_type = args.audio_loss_type
     if audio_loss_type is None:
         audio_loss_type = _config_train_value(config, "audio_loss_type", "stft_log_l1")
@@ -217,6 +222,7 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
     )
     audio_crop_mode = str(_require_value(audio_crop_mode, "train.audio_crop_mode"))
     audio_head_type = str(_require_value(audio_head_type, "train.audio_head_type"))
+    audio_renderer_type = str(_require_value(audio_renderer_type, "train.audio_renderer_type"))
     audio_loss_type = str(_require_value(audio_loss_type, "train.audio_loss_type"))
     audio_diff_weight = float(_require_value(audio_diff_weight, "losses.audio_diff_weight"))
     audio_lre_loss_weight = float(
@@ -257,6 +263,13 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
             "train.audio_head_type must be one of simple/spectral/audiogs, "
             f"got {audio_head_type!r}"
         )
+    if audio_renderer_type not in {"direct", "unet"}:
+        raise ValueError(
+            "train.audio_renderer_type must be one of direct/unet, "
+            f"got {audio_renderer_type!r}"
+        )
+    if audio_head_type != "audiogs" and audio_renderer_type != "direct":
+        raise ValueError("train.audio_renderer_type=unet is only supported with audio_head_type=audiogs")
     if audio_loss_type not in {"stft_log_l1", "audiogs_mono_diff"}:
         raise ValueError(
             "train.audio_loss_type must be one of stft_log_l1/audiogs_mono_diff, "
@@ -290,6 +303,7 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
         audio_window_seconds=audio_window_seconds,
         audio_crop_mode=audio_crop_mode,
         audio_head_type=audio_head_type,
+        audio_renderer_type=audio_renderer_type,
         audio_loss_type=audio_loss_type,
         audio_diff_weight=audio_diff_weight,
         audio_use_log_mag_loss=audio_use_log_mag_loss,
@@ -340,6 +354,7 @@ def build_model(
     ftgspp_checkpoint: str | Path,
     top_k: int = 8192,
     audio_head_type: str = "simple",
+    audio_renderer_type: str = "direct",
 ) -> JointAVGaussianModel:
     bridge = FTGSRendererBridge.load_checkpoint(ftgspp_checkpoint)
     means = bridge.gaussians.means
@@ -362,6 +377,10 @@ def build_model(
             num_points=num_points,
             top_k=effective_top_k,
             carrier_indices=carrier_indices,
+            renderer_type=audio_renderer_type,
+            use_stereo_cues=True,
+            diff_use_inv_distance=True,
+            diff_use_side_mag=True,
         )
     else:
         raise ValueError(f"unknown audio_head_type {audio_head_type!r}")
@@ -674,6 +693,7 @@ def train_and_save(
     audio_window_seconds: float = 0.5,
     audio_crop_mode: str = "center",
     audio_head_type: str = "simple",
+    audio_renderer_type: str = "direct",
     audio_loss_type: str = "stft_log_l1",
     audio_diff_weight: float = 2.0,
     audio_use_log_mag_loss: bool = False,
@@ -685,7 +705,12 @@ def train_and_save(
     config_path: str | Path | None = None,
     frame_reader: FrameReader | None = None,
 ) -> dict[str, float | int | str]:
-    model = build_model(ftgspp_checkpoint, top_k=top_k, audio_head_type=audio_head_type)
+    model = build_model(
+        ftgspp_checkpoint,
+        top_k=top_k,
+        audio_head_type=audio_head_type,
+        audio_renderer_type=audio_renderer_type,
+    )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     warmup_loss_history = train_audio_warmup(
@@ -750,6 +775,7 @@ def train_and_save(
         "audio_window_seconds": float(audio_window_seconds),
         "audio_crop_mode": str(audio_crop_mode),
         "audio_head_type": str(audio_head_type),
+        "audio_renderer_type": str(audio_renderer_type),
         "audio_loss_type": str(audio_loss_type),
         "audio_diff_weight": float(audio_diff_weight),
         "audio_use_log_mag_loss": bool(audio_use_log_mag_loss),
@@ -780,6 +806,7 @@ def train_and_save(
         "warmup_steps": int(warmup_steps),
         "joint_steps": int(joint_steps),
         "audio_head_type": str(audio_head_type),
+        "audio_renderer_type": str(audio_renderer_type),
         "audio_loss_type": str(audio_loss_type),
         "audio_crop_mode": str(audio_crop_mode),
         "final_loss": (
@@ -820,6 +847,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         audio_window_seconds=config.audio_window_seconds,
         audio_crop_mode=config.audio_crop_mode,
         audio_head_type=config.audio_head_type,
+        audio_renderer_type=config.audio_renderer_type,
         audio_loss_type=config.audio_loss_type,
         audio_diff_weight=config.audio_diff_weight,
         audio_use_log_mag_loss=config.audio_use_log_mag_loss,

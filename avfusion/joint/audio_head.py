@@ -24,6 +24,85 @@ SH_C3 = (
 )
 
 
+class DualBranchAudioUNet(nn.Module):
+    """AudioGS dual-branch TF renderer for mono/diff masks.
+
+    This mirrors the local AudioGS renderer structure: a mono branch consumes
+    source magnitude, SH response, and inverse distance; a diff branch consumes
+    the directional diff response plus optional cues. The branches merge through
+    a shared encoder/decoder and emit mono/diff TF masks.
+    """
+
+    def __init__(self, use_groupnorm: bool = True, diff_in_channels: int = 1):
+        super().__init__()
+        self.diff_in_channels = int(diff_in_channels)
+        self.enc1 = self._make_layer(3, 64, use_groupnorm)
+        self.enc2 = self._make_layer(64, 128, use_groupnorm)
+        self.enc3 = self._make_layer(128, 256, use_groupnorm)
+        self.enc4 = self._make_layer(256, 512, use_groupnorm)
+        self.diff_enc1 = self._make_layer(self.diff_in_channels, 64, use_groupnorm)
+        self.maxpool = nn.MaxPool2d(2)
+        self.upconv4 = nn.ConvTranspose2d(512, 256, 2, stride=2)
+        self.dec4 = self._make_layer(512, 256, use_groupnorm)
+        self.upconv3 = nn.ConvTranspose2d(256, 128, 2, stride=2)
+        self.dec3 = self._make_layer(256, 128, use_groupnorm)
+        self.upconv2 = nn.ConvTranspose2d(128, 64, 2, stride=2)
+        self.dec2 = self._make_layer(128, 64, use_groupnorm)
+        self.upconv1 = nn.ConvTranspose2d(64, 64, 2, stride=2)
+        self.dec1 = self._make_layer(128, 64, use_groupnorm)
+        self.out_mono = nn.Conv2d(64, 1, 1)
+        self.out_diff = nn.Conv2d(64, 1, 1)
+
+    @staticmethod
+    def _norm(num_channels: int, use_groupnorm: bool) -> nn.Module:
+        if use_groupnorm:
+            return nn.GroupNorm(num_groups=8 if num_channels >= 8 else 1, num_channels=num_channels)
+        return nn.BatchNorm2d(num_channels)
+
+    @classmethod
+    def _make_layer(cls, in_channels: int, out_channels: int, use_groupnorm: bool) -> nn.Sequential:
+        return nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, 3, padding=1, bias=False),
+            cls._norm(out_channels, use_groupnorm),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, 3, padding=1, bias=False),
+            cls._norm(out_channels, use_groupnorm),
+            nn.ReLU(inplace=True),
+        )
+
+    @staticmethod
+    def _resize_like(x: Tensor, ref: Tensor) -> Tensor:
+        if x.shape[-2:] == ref.shape[-2:]:
+            return x
+        return F.interpolate(x, size=ref.shape[-2:], mode="bilinear", align_corners=False)
+
+    def forward(self, mono_features: Tensor, diff_features: Tensor) -> tuple[Tensor, Tensor]:
+        e1_mono = self.enc1(mono_features)
+        e1_pool_mono = self.maxpool(e1_mono)
+        e1_diff = self.diff_enc1(diff_features)
+        e1_pool_diff = self.maxpool(e1_diff)
+        e1_pool = 0.5 * (e1_pool_mono + e1_pool_diff)
+
+        e2 = self.enc2(e1_pool)
+        e2_pool = self.maxpool(e2)
+        e3 = self.enc3(e2_pool)
+        e3_pool = self.maxpool(e3)
+        e4 = self.enc4(e3_pool)
+
+        d4_up = self._resize_like(self.upconv4(e4), e3)
+        d4 = self.dec4(torch.cat([d4_up, e3], dim=1))
+        d3_up = self._resize_like(self.upconv3(d4), e2)
+        d3 = self.dec3(torch.cat([d3_up, e2], dim=1))
+        d2_up = self._resize_like(self.upconv2(d3), e1_mono)
+        d2 = self.dec2(torch.cat([d2_up, e1_mono], dim=1))
+        d1_up = self._resize_like(self.upconv1(d2), e1_mono)
+        d1 = self.dec1(torch.cat([d1_up, e1_mono], dim=1))
+
+        mono_mask = F.softplus(self.out_mono(d1)) + 0.1
+        diff_mask = torch.tanh(self.out_diff(d1))
+        return mono_mask, diff_mask
+
+
 class JointAudioHead(nn.Module):
     def __init__(self, num_points: int, top_k: int | None = None):
         super().__init__()
@@ -228,6 +307,11 @@ class AudioGSMaskedSpectralHead(nn.Module):
         sh_degree: int = 3,
         use_geom_phase: bool = True,
         use_ear_distance_attenuation: bool = True,
+        renderer_type: str = "direct",
+        use_groupnorm: bool = True,
+        use_stereo_cues: bool = False,
+        diff_use_inv_distance: bool = False,
+        diff_use_side_mag: bool = False,
         head_radius: float = 0.0875,
         sound_speed: float = 343.0,
         carrier_indices: Tensor | None = None,
@@ -255,6 +339,8 @@ class AudioGSMaskedSpectralHead(nn.Module):
             )
         if int(sh_degree) not in {1, 3}:
             raise ValueError(f"sh_degree must be 1 or 3, got {sh_degree}")
+        if renderer_type not in {"direct", "unet"}:
+            raise ValueError(f"renderer_type must be direct or unet, got {renderer_type!r}")
         self.num_points = int(num_points)
         self.num_frequency_bins = int(num_frequency_bins)
         self.top_k = min(int(top_k), num_points) if top_k is not None else num_points
@@ -267,6 +353,10 @@ class AudioGSMaskedSpectralHead(nn.Module):
         self.sh_degree = int(sh_degree)
         self.use_geom_phase = bool(use_geom_phase)
         self.use_ear_distance_attenuation = bool(use_ear_distance_attenuation)
+        self.renderer_type = str(renderer_type)
+        self.use_stereo_cues = bool(use_stereo_cues)
+        self.diff_use_inv_distance = bool(diff_use_inv_distance)
+        self.diff_use_side_mag = bool(diff_use_side_mag)
         self.head_radius = float(head_radius)
         self.sound_speed = float(sound_speed)
         self.sh_basis_dim = 16 if self.sh_degree == 3 else 4
@@ -302,6 +392,21 @@ class AudioGSMaskedSpectralHead(nn.Module):
             torch.randn(self.top_k, num_frequency_bins, self.sh_basis_dim) * float(sh_rand_init_std)
         )
         self.phase_residual = nn.Parameter(torch.zeros(self.top_k, num_frequency_bins))
+        diff_in_channels = 1
+        if self.use_stereo_cues:
+            diff_in_channels += 1
+        if self.diff_use_inv_distance:
+            diff_in_channels += 1
+        if self.diff_use_side_mag:
+            diff_in_channels += 1
+        self.renderer = (
+            DualBranchAudioUNet(
+                use_groupnorm=bool(use_groupnorm),
+                diff_in_channels=diff_in_channels,
+            )
+            if self.renderer_type == "unet"
+            else None
+        )
         frequencies = torch.linspace(
             0.0,
             0.5 * float(self.sample_rate),
@@ -483,15 +588,17 @@ class AudioGSMaskedSpectralHead(nn.Module):
         diff_envelope: Tensor,
         diff_lr_sign: float = 1.0,
     ) -> tuple[Tensor, Tensor]:
-        diff = diff_envelope.clamp(0.0, 1.0)
-        left = mono_mag * (1.0 + float(diff_lr_sign) * diff)
-        right = mono_mag * (1.0 - float(diff_lr_sign) * diff)
-        return left.clamp_min(0.0), right.clamp_min(0.0)
+        sign = -1.0 if float(diff_lr_sign) < 0.0 else 1.0
+        left = torch.relu(mono_mag * (1.0 + sign * diff_envelope))
+        right = torch.relu(mono_mag * (1.0 - sign * diff_envelope))
+        return left, right
 
     def _render_masks(
         self,
         state: dict[str, Tensor],
         source_magnitude: Tensor,
+        ild_spec: Tensor | None = None,
+        side_spec: Tensor | None = None,
         camera_w2c: Tensor | None = None,
     ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         xyz = state["xyz"]
@@ -527,23 +634,72 @@ class AudioGSMaskedSpectralHead(nn.Module):
 
         mono_fields = torch.einsum("pc,pfc->pf", features, self.mono_sh.index_select(0, local_indices))
         diff_fields = torch.einsum("pc,pfc->pf", features, self.diff_sh.index_select(0, local_indices))
-        mono_logits = (weights * mono_fields).sum(dim=0) + self.mono_bias
-        diff_logits = (weights * diff_fields).sum(dim=0) + self.diff_bias
-
-        mono_mask = torch.sigmoid(mono_logits).reshape(-1, 1)
-        diff_mask = torch.sigmoid(diff_logits).reshape(-1, 1)
+        if self.renderer_type == "unet":
+            mono_mask, diff_mask = self._render_unet_masks(
+                mono_fields=mono_fields,
+                diff_fields=diff_fields,
+                weights=weights,
+                distance=distance,
+                source_magnitude=source_magnitude,
+                ild_spec=ild_spec,
+                side_spec=side_spec,
+            )
+        else:
+            mono_logits = (weights * mono_fields).sum(dim=0) + self.mono_bias
+            diff_logits = (weights * diff_fields).sum(dim=0) + self.diff_bias
+            mono_mask = torch.sigmoid(mono_logits).reshape(-1, 1).expand_as(source_magnitude)
+            diff_mask = torch.sigmoid(diff_logits).reshape(-1, 1).expand_as(source_magnitude)
         residual_phase = (
             weights * self.phase_residual.index_select(0, local_indices)
         ).sum(dim=0).reshape(-1, 1)
         phase_delta = self._geometry_phase_delta(camera_direction, weights) + residual_phase
         left_gain, right_gain = self._ear_distance_gains(camera_xyz, weights)
         return (
-            mono_mask.expand_as(source_magnitude),
-            diff_mask.expand_as(source_magnitude),
+            mono_mask,
+            diff_mask,
             phase_delta.expand_as(source_magnitude),
             left_gain.expand_as(source_magnitude),
             right_gain.expand_as(source_magnitude),
         )
+
+    def _render_unet_masks(
+        self,
+        mono_fields: Tensor,
+        diff_fields: Tensor,
+        weights: Tensor,
+        distance: Tensor,
+        source_magnitude: Tensor,
+        ild_spec: Tensor | None = None,
+        side_spec: Tensor | None = None,
+    ) -> tuple[Tensor, Tensor]:
+        if self.renderer is None:
+            raise RuntimeError("renderer_type='unet' requires a DualBranchAudioUNet renderer")
+        if source_magnitude.ndim != 2:
+            raise ValueError(f"source_magnitude must have shape (freq, time), got {tuple(source_magnitude.shape)}")
+        freq_bins, time_bins = source_magnitude.shape
+        if freq_bins != self.num_frequency_bins:
+            raise ValueError(
+                f"source_magnitude freq bins must be {self.num_frequency_bins}, got {freq_bins}"
+            )
+        mono_tf = (weights * mono_fields).sum(dim=0).reshape(freq_bins, 1).expand(freq_bins, time_bins)
+        diff_tf = (weights * diff_fields).sum(dim=0).reshape(freq_bins, 1).expand(freq_bins, time_bins)
+        inv_distance = (weights * distance.reciprocal()).sum(dim=0).reshape(freq_bins, 1).expand(freq_bins, time_bins)
+        mono_features = torch.stack(
+            [source_magnitude, mono_tf, inv_distance],
+            dim=0,
+        ).unsqueeze(0)
+        diff_channels = [diff_tf]
+        if self.use_stereo_cues:
+            diff_channels.append(torch.zeros_like(diff_tf) if ild_spec is None else ild_spec)
+        if self.diff_use_inv_distance:
+            diff_channels.append(inv_distance)
+        if self.diff_use_side_mag:
+            diff_channels.append(torch.zeros_like(diff_tf) if side_spec is None else side_spec)
+        diff_features = torch.stack(diff_channels, dim=0).unsqueeze(0)
+        mono_features = torch.nan_to_num(mono_features, nan=0.0, posinf=0.0, neginf=0.0)
+        diff_features = torch.nan_to_num(diff_features, nan=0.0, posinf=0.0, neginf=0.0)
+        mono_mask, diff_mask = self.renderer(mono_features, diff_features)
+        return mono_mask[0, 0], diff_mask[0, 0]
 
     def forward(
         self,
@@ -580,9 +736,15 @@ class AudioGSMaskedSpectralHead(nn.Module):
         mag_l = spec_l.abs()
         mag_r = spec_r.abs()
         source_magnitude = torch.nan_to_num(0.5 * (mag_l + mag_r), nan=0.0, posinf=0.0, neginf=0.0)
+        eps = source_magnitude.new_tensor(1e-8)
+        ild_spec = torch.log(mag_l.clamp_min(eps)) - torch.log(mag_r.clamp_min(eps))
+        ild_spec = torch.nan_to_num(ild_spec, nan=0.0, posinf=0.0, neginf=0.0)
+        side_spec = torch.nan_to_num((mag_l - mag_r).abs(), nan=0.0, posinf=0.0, neginf=0.0)
         mono_mask, diff_mask, phase_delta, left_gain, right_gain = self._render_masks(
             state,
             source_magnitude,
+            ild_spec=ild_spec,
+            side_spec=side_spec,
             camera_w2c=camera_w2c,
         )
         mono_mag = torch.nan_to_num(mono_mask * source_magnitude, nan=0.0, posinf=0.0, neginf=0.0)

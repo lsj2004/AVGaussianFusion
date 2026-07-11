@@ -68,6 +68,8 @@ def test_config_file_populates_route_b_training_args(tmp_path):
                 "  shared_lr: 0.0004",
                 "  audio_window_seconds: 0.5",
                 "  audio_crop_mode: start",
+                "  audio_renderer_type: unet",
+                "  audio_head_type: audiogs",
                 "  audio_loss_type: audiogs_mono_diff",
                 "losses:",
                 "  audio_diff_weight: 2.0",
@@ -101,6 +103,8 @@ def test_config_file_populates_route_b_training_args(tmp_path):
     assert cfg.shared_lr == pytest.approx(0.0004)
     assert cfg.audio_window_seconds == pytest.approx(0.5)
     assert cfg.audio_crop_mode == "start"
+    assert cfg.audio_head_type == "audiogs"
+    assert cfg.audio_renderer_type == "unet"
     assert cfg.audio_loss_type == "audiogs_mono_diff"
     assert cfg.audio_diff_weight == pytest.approx(2.0)
     assert cfg.audio_use_log_mag_loss is False

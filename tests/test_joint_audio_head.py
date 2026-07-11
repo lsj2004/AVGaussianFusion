@@ -131,6 +131,35 @@ def test_audiogs_masked_spectral_head_outputs_stereo_audio():
     assert head.active_count == 3
 
 
+def test_audiogs_masked_spectral_head_can_use_dual_branch_unet_renderer():
+    head = AudioGSMaskedSpectralHead(
+        num_points=5,
+        num_frequency_bins=257,
+        top_k=3,
+        renderer_type="unet",
+        use_stereo_cues=True,
+        diff_use_inv_distance=True,
+        diff_use_side_mag=True,
+    )
+    state = _state()
+    source = torch.randn(2, 4096)
+
+    pred = head(state, source)
+    loss = pred.pow(2).mean()
+    loss.backward()
+
+    assert pred.shape == (2, 4096)
+    assert torch.isfinite(pred).all()
+    assert head.renderer is not None
+    assert head.renderer.diff_in_channels == 4
+    _assert_nonzero_grad(head.renderer.out_mono.weight)
+    _assert_nonzero_grad(head.renderer.out_diff.weight)
+    _assert_nonzero_grad(head.mono_sh)
+    _assert_nonzero_grad(head.diff_sh)
+    assert state["xyz"].grad is not None
+    assert state["xyz"].grad.abs().sum() > 0
+
+
 def test_audiogs_masked_spectral_head_uses_degree3_sh_basis_by_default():
     head = AudioGSMaskedSpectralHead(num_points=5, num_frequency_bins=257)
 
