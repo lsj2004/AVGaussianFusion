@@ -98,6 +98,9 @@ def evaluate_joint_audio_checkpoint(
     frame_reader: FrameReader | None = None,
     include_dpam: bool = False,
     dpam_max_windows: int | None = None,
+    audio_bandpass: dict | None = None,
+    audio_eval_protocol: str = "visual_center",
+    skip_padding_windows: bool = False,
 ) -> dict[str, float | str | dict]:
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     if checkpoint.get("route") != "B_joint_av":
@@ -110,6 +113,7 @@ def evaluate_joint_audio_checkpoint(
         if audio_window_seconds is not None
         else config.get("audio_window_seconds", 0.5)
     )
+    bandpass = audio_bandpass if audio_bandpass is not None else config.get("audio_bandpass")
     visual_dataset = VisualFrameDataset(
         manifest_path,
         split="eval",
@@ -119,10 +123,22 @@ def evaluate_joint_audio_checkpoint(
     )
     if len(visual_dataset) == 0:
         raise ValueError("visual eval split is empty")
+    if audio_eval_protocol not in {
+        "visual_center",
+        "visual_center_skip_padding",
+        "audiogs_start_nonoverlap",
+    }:
+        raise ValueError(f"unknown audio_eval_protocol {audio_eval_protocol!r}")
+    if skip_padding_windows and audio_eval_protocol == "visual_center":
+        audio_eval_protocol = "visual_center_skip_padding"
+    crop_mode = "start" if audio_eval_protocol == "audiogs_start_nonoverlap" else "center"
+    allow_padding = audio_eval_protocol == "visual_center"
     audio_cropper = TimedAudioCropper(
         manifest_path,
         crop_seconds=window_seconds,
-        mode="center",
+        mode=crop_mode,
+        allow_padding=allow_padding,
+        bandpass=bandpass,
     )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = _restore_joint_model(checkpoint).to(device)
@@ -134,12 +150,58 @@ def evaluate_joint_audio_checkpoint(
     window_metrics = []
     camera = None
 
-    with torch.no_grad():
+    if audio_eval_protocol == "audiogs_start_nonoverlap":
+        eval_items = []
+        next_start_seconds = 0.0
+        max_visual_time = float(visual_dataset[len(visual_dataset) - 1]["time"].reshape(-1)[0].item())
+        while len(eval_items) < limit and next_start_seconds <= max_visual_time + 1e-6:
+            best_idx = min(
+                range(len(visual_dataset)),
+                key=lambda idx: abs(
+                    float(visual_dataset[idx]["time"].reshape(-1)[0].item()) - next_start_seconds
+                ),
+            )
+            visual_sample = visual_dataset[best_idx]
+            try:
+                audio_sample = audio_cropper.get_crop(
+                    str(visual_sample["camera"]),
+                    time_seconds=next_start_seconds,
+                )
+            except ValueError as error:
+                if "padding" in str(error):
+                    break
+                raise
+            eval_items.append((visual_sample, audio_sample, float(next_start_seconds)))
+            next_start_seconds += window_seconds
+    else:
+        eval_items = []
+        skipped_padding_windows = 0
         for idx in range(limit):
             visual_sample = visual_dataset[idx]
             camera = str(visual_sample["camera"])
-            audio_sample = audio_cropper.get_crop(camera, visual_sample["time"])
+            try:
+                audio_sample = audio_cropper.get_crop(camera, visual_sample["time"])
+            except ValueError as error:
+                if audio_eval_protocol == "visual_center_skip_padding" and "padding" in str(error):
+                    skipped_padding_windows += 1
+                    continue
+                raise
+            eval_items.append(
+                (
+                    visual_sample,
+                    audio_sample,
+                    float(visual_sample["time"].detach().cpu().reshape(-1)[0].item()),
+                )
+            )
+    if not eval_items:
+        raise ValueError(f"no audio eval windows selected for protocol {audio_eval_protocol!r}")
+
+    with torch.no_grad():
+        for visual_sample, audio_sample, render_time_seconds in eval_items:
+            camera = str(visual_sample["camera"])
             render_time = visual_sample["time"].to(device)
+            if audio_eval_protocol == "audiogs_start_nonoverlap":
+                render_time = torch.tensor([[render_time_seconds]], device=device, dtype=render_time.dtype)
             pred_window = model.render_audio(
                 render_time,
                 audio_sample["source_audio"].to(device),
@@ -156,7 +218,7 @@ def evaluate_joint_audio_checkpoint(
             )
             metrics["camera"] = str(camera)
             metrics["frame"] = int(visual_sample["frame"])
-            metrics["time"] = float(visual_sample["time"].detach().cpu().reshape(-1)[0].item())
+            metrics["time"] = float(render_time_seconds)
             metrics["start_sample"] = int(audio_sample["start_sample"])
             window_metrics.append(metrics)
         pred = torch.cat(preds, dim=-1)
@@ -174,13 +236,18 @@ def evaluate_joint_audio_checkpoint(
         summary["camera"] = str(camera)
         summary["checkpoint"] = str(checkpoint_path)
         summary["stage"] = str(checkpoint.get("stage", "unknown"))
-        summary["num_windows"] = int(limit)
+        summary["num_windows"] = int(len(eval_items))
+        summary["requested_windows"] = int(limit)
+        summary["skipped_padding_windows"] = int(
+            skipped_padding_windows if audio_eval_protocol == "visual_center_skip_padding" else 0
+        )
+        summary["audio_eval_protocol"] = audio_eval_protocol
         summary["audio_window_seconds"] = float(window_seconds)
         summary["window_metrics"] = window_metrics
         summary["concatenated_overlapping_debug"] = debug
         if include_dpam:
             dpam_window_metrics = []
-            for window_idx in _select_dpam_window_indices(limit, dpam_max_windows):
+            for window_idx in _select_dpam_window_indices(len(preds), dpam_max_windows):
                 metrics = compute_audiogs_metrics(
                     preds[window_idx],
                     targets[window_idx],
@@ -212,6 +279,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ftgspp-memmap")
     parser.add_argument("--audio-window-seconds", type=float)
     parser.add_argument("--max-frames", type=int)
+    parser.add_argument(
+        "--audio-eval-protocol",
+        choices=["visual_center", "visual_center_skip_padding", "audiogs_start_nonoverlap"],
+        default="visual_center",
+    )
+    parser.add_argument("--skip-padding-windows", action="store_true")
     parser.add_argument("--include-dpam", action="store_true")
     parser.add_argument(
         "--dpam-max-windows",
@@ -234,6 +307,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         max_frames=args.max_frames,
         include_dpam=args.include_dpam,
         dpam_max_windows=args.dpam_max_windows,
+        audio_eval_protocol=args.audio_eval_protocol,
+        skip_padding_windows=args.skip_padding_windows,
     )
     print(summary)
 

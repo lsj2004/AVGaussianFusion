@@ -190,8 +190,8 @@ class TimedAudioCropper:
         bandpass: dict[str, float | bool] | None = None,
     ):
         self.manifest = SceneManifest.load(manifest_path)
-        if mode != "center":
-            raise ValueError(f"only centered audio crops are supported, got {mode!r}")
+        if mode not in {"center", "start"}:
+            raise ValueError(f"audio crop mode must be center or start, got {mode!r}")
         self.mode = mode
         self.crop_seconds = float(crop_seconds)
         if self.crop_seconds <= 0:
@@ -212,8 +212,11 @@ class TimedAudioCropper:
         if camera_name not in self.manifest.cameras:
             raise KeyError(f"unknown camera {camera_name}")
         t = float(torch.as_tensor(time_seconds).reshape(-1)[0].item())
-        center_sample = int(round(t * self.sample_rate))
-        start_sample = center_sample - self.crop_samples // 2
+        anchor_sample = int(round(t * self.sample_rate))
+        if self.mode == "center":
+            start_sample = anchor_sample - self.crop_samples // 2
+        else:
+            start_sample = anchor_sample
         source_full = self._load_audio(self.manifest.audio.source_path)
         target_full = self._load_audio(self.manifest.cameras[camera_name].audio_path)
         end_sample = start_sample + self.crop_samples

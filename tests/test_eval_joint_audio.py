@@ -10,7 +10,7 @@ from avfusion.joint.audio_head import JointAudioHead, SpectralJointAudioHead
 from avfusion.joint.ftgspp_bridge import FTGSRendererBridge
 from avfusion.joint.model import JointAVGaussianModel
 from avfusion.train.train_joint_av_gaussians import save_joint_checkpoint
-from tests.test_audio_video_dataset import _write_manifest
+from tests.test_audio_video_dataset import _write_manifest, _write_wav
 from tests.test_joint_ftgspp_bridge import FakeGaussians
 
 
@@ -169,6 +169,135 @@ def test_evaluate_joint_audio_checkpoint_can_sample_dpam_windows(monkeypatch, tm
     assert summary["DPAM"] == pytest.approx(5.5)
     assert summary["DPAM_available"] is True
     assert summary["dpam_num_windows"] == 2
+
+
+def test_evaluate_joint_audio_checkpoint_can_skip_padding_windows(monkeypatch, tmp_path):
+    manifest = _write_manifest(tmp_path)
+    aligned = tmp_path / "audio" / "aligned_16k_stereo"
+    _write_wav(aligned / "near.wav", frames=16000, value=0.5)
+    _write_wav(aligned / "cam10.wav", frames=16000, value=0.25)
+    visual_root = tmp_path / "visual"
+    np.savez(
+        visual_root / "cameras.npz",
+        names=np.array(["cam00", "cam10"]),
+        intrinsics=np.stack([np.eye(3), np.eye(3)]),
+        w2c=np.stack([np.eye(4), np.eye(4)]),
+    )
+    ftgspp_checkpoint = tmp_path / "gaussians.pt"
+    checkpoint = tmp_path / "joint.pt"
+    output_dir = tmp_path / "eval"
+    ftgspp_checkpoint.write_bytes(b"placeholder")
+    model = JointAVGaussianModel(FTGSRendererBridge(FakeGaussians()), JointAudioHead(4, top_k=4))
+    save_joint_checkpoint(
+        output_path=checkpoint,
+        model=model,
+        stage="joint_finetune",
+        ftgspp_checkpoint=ftgspp_checkpoint,
+        manifest_path=manifest,
+        config={"top_k": 4, "visual_scale": 0.5, "audio_window_seconds": 0.5},
+        loss_history=[0.1],
+    )
+    monkeypatch.setattr(
+        "avfusion.train.train_joint_av_gaussians.FTGSRendererBridge.load_checkpoint",
+        lambda path: FTGSRendererBridge(FakeGaussians()),
+    )
+    monkeypatch.setattr(
+        "avfusion.eval.eval_joint_audio.compute_audiogs_metrics",
+        lambda pred, target, sample_rate, include_dpam=True: {
+            "MAG": 1.0,
+            "ENV": 2.0,
+            "LRE": 3.0,
+            "RTE": None,
+            "RTE_available": False,
+            "RTE_error": "not configured",
+            "DPAM": None,
+            "DPAM_available": False,
+            "DPAM_error": "not configured",
+        },
+    )
+
+    summary = evaluate_joint_audio_checkpoint(
+        manifest_path=manifest,
+        checkpoint_path=checkpoint,
+        output_dir=output_dir,
+        frame_reader=lambda path, frame_idx: torch.zeros(4, 6, 3),
+        max_frames=20,
+        skip_padding_windows=True,
+    )
+
+    assert summary["audio_eval_protocol"] == "visual_center_skip_padding"
+    assert summary["num_windows"] == 12
+    assert summary["skipped_padding_windows"] == 8
+    assert [row["frame"] for row in summary["window_metrics"]][:3] == [8, 9, 10]
+    assert all(row["start_sample"] >= 0 for row in summary["window_metrics"])
+
+
+def test_evaluate_joint_audio_checkpoint_supports_audiogs_start_nonoverlap(monkeypatch, tmp_path):
+    manifest = _write_manifest(tmp_path)
+    aligned = tmp_path / "audio" / "aligned_16k_stereo"
+    _write_wav(aligned / "near.wav", frames=48000, value=0.5)
+    _write_wav(aligned / "cam10.wav", frames=48000, value=0.25)
+    visual_root = tmp_path / "visual"
+    np.savez(
+        visual_root / "cameras.npz",
+        names=np.array(["cam00", "cam10"]),
+        intrinsics=np.stack([np.eye(3), np.eye(3)]),
+        w2c=np.stack([np.eye(4), np.eye(4)]),
+    )
+    ftgspp_checkpoint = tmp_path / "gaussians.pt"
+    checkpoint = tmp_path / "joint.pt"
+    output_dir = tmp_path / "eval"
+    ftgspp_checkpoint.write_bytes(b"placeholder")
+    model = JointAVGaussianModel(FTGSRendererBridge(FakeGaussians()), JointAudioHead(4, top_k=4))
+    save_joint_checkpoint(
+        output_path=checkpoint,
+        model=model,
+        stage="joint_finetune",
+        ftgspp_checkpoint=ftgspp_checkpoint,
+        manifest_path=manifest,
+        config={"top_k": 4, "visual_scale": 0.5, "audio_window_seconds": 0.5},
+        loss_history=[0.1],
+    )
+    monkeypatch.setattr(
+        "avfusion.train.train_joint_av_gaussians.FTGSRendererBridge.load_checkpoint",
+        lambda path: FTGSRendererBridge(FakeGaussians()),
+    )
+    monkeypatch.setattr(
+        "avfusion.eval.eval_joint_audio.compute_audiogs_metrics",
+        lambda pred, target, sample_rate, include_dpam=True: {
+            "MAG": 1.0,
+            "ENV": 2.0,
+            "LRE": 3.0,
+            "RTE": None,
+            "RTE_available": False,
+            "RTE_error": "not configured",
+            "DPAM": None,
+            "DPAM_available": False,
+            "DPAM_error": "not configured",
+        },
+    )
+
+    summary = evaluate_joint_audio_checkpoint(
+        manifest_path=manifest,
+        checkpoint_path=checkpoint,
+        output_dir=output_dir,
+        frame_reader=lambda path, frame_idx: torch.zeros(4, 6, 3),
+        audio_eval_protocol="audiogs_start_nonoverlap",
+        include_dpam=True,
+    )
+
+    assert summary["audio_eval_protocol"] == "audiogs_start_nonoverlap"
+    assert summary["num_windows"] == 6
+    assert summary["dpam_num_windows"] == 6
+    assert [row["frame"] for row in summary["window_metrics"]] == [0, 15, 30, 45, 60, 75]
+    assert [row["start_sample"] for row in summary["window_metrics"]] == [
+        0,
+        8000,
+        16000,
+        24000,
+        32000,
+        40000,
+    ]
 
 
 def test_evaluate_joint_audio_checkpoint_restores_spectral_audio_head(monkeypatch, tmp_path):
