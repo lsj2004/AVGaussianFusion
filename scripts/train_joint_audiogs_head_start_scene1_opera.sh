@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd)"
+FTGSPP_ROOT="/mnt/sda/lisujing/Dataset/FreeTimeGSPlusPlus"
+CONFIG="${ROOT}/configs/scene1_opera_b_joint_av_audiogs_head_start.yaml"
+RUN_DIR="${ROOT}/runs/scene1_opera_b_joint_av_audiogs_head_start"
+MANIFEST="${ROOT}/runs/scene1_opera_a/scene_manifest.json"
+FTGSPP_CHECKPOINT="${ROOT}/runs/scene1_opera_a/ftgspp/scene1_opera/00/gaussians.pt"
+
+mkdir -p "${RUN_DIR}"
+
+if [[ ! -f "${CONFIG}" ]]; then
+  echo "missing start-anchored AudioGS-head config: ${CONFIG}" >&2
+  exit 1
+fi
+
+if [[ ! -f "${MANIFEST}" ]]; then
+  echo "missing Route A manifest: ${MANIFEST}" >&2
+  exit 1
+fi
+
+if [[ ! -f "${FTGSPP_CHECKPOINT}" ]]; then
+  echo "missing Route A FTGS++ checkpoint: ${FTGSPP_CHECKPOINT}" >&2
+  exit 1
+fi
+
+EXTRA_ARGS=()
+if [[ -n "${JOINT_STEPS_OVERRIDE:-}" ]]; then
+  EXTRA_ARGS+=(--joint-steps "${JOINT_STEPS_OVERRIDE}")
+  echo "AudioGS start-anchored Route B scene1_opera joint_steps=${JOINT_STEPS_OVERRIDE} (override)"
+else
+  echo "AudioGS start-anchored Route B scene1_opera using config joint_steps"
+fi
+
+cd "${FTGSPP_ROOT}"
+PYTHONPATH="${ROOT}:${FTGSPP_ROOT}:${PYTHONPATH:-}" \
+UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/avgaussianfusion-uv-cache}" \
+uv run --no-sync --with soundfile --with pyyaml --with scipy python -m avfusion.train.train_joint_av_gaussians \
+  --config "${CONFIG}" \
+  "${EXTRA_ARGS[@]}"

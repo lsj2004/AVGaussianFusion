@@ -37,6 +37,7 @@ class TrainingConfig:
     audio_loss_weight: float
     visual_scale: float
     audio_window_seconds: float
+    audio_crop_mode: str
     audio_head_type: str
     audio_loss_type: str
     audio_diff_weight: float
@@ -77,6 +78,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--audio-lr", type=float)
     parser.add_argument("--shared-lr", type=float)
     parser.add_argument("--audio-window-seconds", type=float)
+    parser.add_argument("--audio-crop-mode", choices=["center", "start"])
     parser.add_argument("--audio-head-type", choices=["simple", "spectral", "audiogs"])
     parser.add_argument("--audio-loss-type", choices=["stft_log_l1", "audiogs_mono_diff"])
     parser.add_argument("--audio-diff-weight", type=float)
@@ -173,6 +175,9 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
     audio_window_seconds = args.audio_window_seconds
     if audio_window_seconds is None:
         audio_window_seconds = _config_train_value(config, "audio_window_seconds", 0.5)
+    audio_crop_mode = args.audio_crop_mode
+    if audio_crop_mode is None:
+        audio_crop_mode = _config_train_value(config, "audio_crop_mode", "center")
     audio_head_type = args.audio_head_type
     if audio_head_type is None:
         audio_head_type = _config_train_value(config, "audio_head_type", "simple")
@@ -210,6 +215,7 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
     audio_window_seconds = float(
         _require_value(audio_window_seconds, "train.audio_window_seconds")
     )
+    audio_crop_mode = str(_require_value(audio_crop_mode, "train.audio_crop_mode"))
     audio_head_type = str(_require_value(audio_head_type, "train.audio_head_type"))
     audio_loss_type = str(_require_value(audio_loss_type, "train.audio_loss_type"))
     audio_diff_weight = float(_require_value(audio_diff_weight, "losses.audio_diff_weight"))
@@ -240,6 +246,11 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
     if audio_window_seconds <= 0:
         raise ValueError(
             f"train.audio_window_seconds must be positive, got {audio_window_seconds}"
+        )
+    if audio_crop_mode not in {"center", "start"}:
+        raise ValueError(
+            "train.audio_crop_mode must be one of center/start, "
+            f"got {audio_crop_mode!r}"
         )
     if audio_head_type not in {"simple", "spectral", "audiogs"}:
         raise ValueError(
@@ -277,6 +288,7 @@ def resolve_training_config(args: argparse.Namespace) -> TrainingConfig:
         audio_loss_weight=audio_loss_weight,
         visual_scale=visual_scale,
         audio_window_seconds=audio_window_seconds,
+        audio_crop_mode=audio_crop_mode,
         audio_head_type=audio_head_type,
         audio_loss_type=audio_loss_type,
         audio_diff_weight=audio_diff_weight,
@@ -396,6 +408,7 @@ def _audio_frames(path: str | Path) -> int:
 def _compute_valid_aligned_samples(
     manifest_path: str | Path,
     audio_window_seconds: float,
+    audio_crop_mode: str = "center",
 ) -> dict[str, int | None]:
     manifest = SceneManifest.load(manifest_path)
     sample_rate = int(manifest.audio.sample_rate)
@@ -407,8 +420,13 @@ def _compute_valid_aligned_samples(
         max_frames = min(source_frames, target_frames)
         valid = 0
         for time_seconds in manifest.frame_times:
-            center_sample = int(round(float(time_seconds) * sample_rate))
-            start_sample = center_sample - crop_samples // 2
+            anchor_sample = int(round(float(time_seconds) * sample_rate))
+            if audio_crop_mode == "center":
+                start_sample = anchor_sample - crop_samples // 2
+            elif audio_crop_mode == "start":
+                start_sample = anchor_sample
+            else:
+                raise ValueError(f"unknown audio_crop_mode {audio_crop_mode!r}")
             end_sample = start_sample + crop_samples
             if start_sample >= 0 and end_sample <= max_frames:
                 valid += 1
@@ -427,11 +445,13 @@ def write_train_summary(
     manifest_path: str | Path,
     summary: dict[str, float | int | str],
     audio_window_seconds: float,
+    audio_crop_mode: str = "center",
 ) -> None:
     manifest = SceneManifest.load(manifest_path)
     valid = _compute_valid_aligned_samples(
         manifest_path,
         audio_window_seconds=audio_window_seconds,
+        audio_crop_mode=audio_crop_mode,
     )
     payload = {
         **summary,
@@ -440,6 +460,7 @@ def write_train_summary(
         "eval_cam": manifest.eval_cameras[0] if manifest.eval_cameras else None,
         "source_audio": Path(manifest.audio.source_path).name,
         "audio_window_seconds": float(audio_window_seconds),
+        "audio_crop_mode": str(audio_crop_mode),
         "valid_aligned_samples": int(valid["valid_aligned_samples"]),
         "valid_frames_per_camera": valid["valid_frames_per_camera"],
     }
@@ -506,6 +527,7 @@ def train_joint_finetune(
     audio_loss_weight: float,
     visual_scale: float,
     audio_window_seconds: float = 0.5,
+    audio_crop_mode: str = "center",
     audio_loss_type: str = "stft_log_l1",
     audio_diff_weight: float = 2.0,
     audio_use_log_mag_loss: bool = False,
@@ -537,7 +559,7 @@ def train_joint_finetune(
     timed_audio_cropper = TimedAudioCropper(
         manifest_path,
         crop_seconds=audio_window_seconds,
-        mode="center",
+        mode=audio_crop_mode,
         allow_padding=False,
         bandpass=audio_bandpass,
     )
@@ -650,6 +672,7 @@ def train_and_save(
     audio_loss_weight: float = 1.0,
     visual_scale: float = 0.125,
     audio_window_seconds: float = 0.5,
+    audio_crop_mode: str = "center",
     audio_head_type: str = "simple",
     audio_loss_type: str = "stft_log_l1",
     audio_diff_weight: float = 2.0,
@@ -689,6 +712,7 @@ def train_and_save(
         audio_loss_weight=audio_loss_weight,
         visual_scale=visual_scale,
         audio_window_seconds=audio_window_seconds,
+        audio_crop_mode=audio_crop_mode,
         audio_loss_type=audio_loss_type,
         audio_diff_weight=audio_diff_weight,
         audio_use_log_mag_loss=audio_use_log_mag_loss,
@@ -724,6 +748,7 @@ def train_and_save(
         "audio_loss_weight": float(audio_loss_weight),
         "visual_scale": float(visual_scale),
         "audio_window_seconds": float(audio_window_seconds),
+        "audio_crop_mode": str(audio_crop_mode),
         "audio_head_type": str(audio_head_type),
         "audio_loss_type": str(audio_loss_type),
         "audio_diff_weight": float(audio_diff_weight),
@@ -756,6 +781,7 @@ def train_and_save(
         "joint_steps": int(joint_steps),
         "audio_head_type": str(audio_head_type),
         "audio_loss_type": str(audio_loss_type),
+        "audio_crop_mode": str(audio_crop_mode),
         "final_loss": (
             joint_loss_history[-1]["total"]
             if joint_loss_history
@@ -770,6 +796,7 @@ def train_and_save(
         manifest_path=manifest_path,
         summary=summary,
         audio_window_seconds=audio_window_seconds,
+        audio_crop_mode=audio_crop_mode,
     )
     return summary
 
@@ -791,6 +818,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         audio_loss_weight=config.audio_loss_weight,
         visual_scale=config.visual_scale,
         audio_window_seconds=config.audio_window_seconds,
+        audio_crop_mode=config.audio_crop_mode,
         audio_head_type=config.audio_head_type,
         audio_loss_type=config.audio_loss_type,
         audio_diff_weight=config.audio_diff_weight,

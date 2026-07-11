@@ -67,6 +67,7 @@ def test_config_file_populates_route_b_training_args(tmp_path):
                 "  audio_lr: 0.003",
                 "  shared_lr: 0.0004",
                 "  audio_window_seconds: 0.5",
+                "  audio_crop_mode: start",
                 "  audio_loss_type: audiogs_mono_diff",
                 "losses:",
                 "  audio_diff_weight: 2.0",
@@ -99,6 +100,7 @@ def test_config_file_populates_route_b_training_args(tmp_path):
     assert cfg.audio_lr == pytest.approx(0.003)
     assert cfg.shared_lr == pytest.approx(0.0004)
     assert cfg.audio_window_seconds == pytest.approx(0.5)
+    assert cfg.audio_crop_mode == "start"
     assert cfg.audio_loss_type == "audiogs_mono_diff"
     assert cfg.audio_diff_weight == pytest.approx(2.0)
     assert cfg.audio_use_log_mag_loss is False
@@ -360,6 +362,45 @@ def test_train_joint_finetune_rejects_zero_visual_weight(tmp_path):
         )
 
 
+def test_train_joint_finetune_can_use_start_anchored_audio_crops(tmp_path):
+    manifest = _write_manifest(tmp_path)
+    aligned = tmp_path / "audio" / "aligned_16k_stereo"
+    _write_wav(aligned / "near.wav", frames=16000, value=0.5)
+    _write_wav(aligned / "cam00.wav", frames=16000, value=0.25)
+    visual_root = tmp_path / "visual"
+    import numpy as np
+
+    np.savez(
+        visual_root / "cameras.npz",
+        names=np.array(["cam00", "cam10"]),
+        intrinsics=np.stack([np.eye(3), np.eye(3)]),
+        w2c=np.stack([np.eye(4), np.eye(4)]),
+    )
+    model = build_model_from_fake(top_k=4)
+
+    losses = train_joint_finetune(
+        model=model,
+        manifest_path=manifest,
+        steps=2,
+        shared_lr=1e-3,
+        audio_lr=1e-3,
+        geometry_reg_weight=0.001,
+        rgb_loss_weight=1.0,
+        audio_loss_weight=1.0,
+        visual_scale=0.5,
+        audio_window_seconds=0.5,
+        audio_crop_mode="start",
+        frame_reader=lambda path, frame_idx: torch.ones(4, 4, 3),
+    )
+
+    assert losses[0]["frame"] == 0
+    assert losses[0]["time"] == pytest.approx(0.0)
+    assert losses[0]["start_sample"] == 0
+    assert losses[1]["frame"] == 1
+    assert losses[1]["time"] == pytest.approx(1 / 30)
+    assert losses[1]["start_sample"] == 533
+
+
 def test_train_and_save_writes_joint_finetune_checkpoint(monkeypatch, tmp_path):
     manifest = _write_manifest(tmp_path)
     aligned = tmp_path / "audio" / "aligned_16k_stereo"
@@ -402,6 +443,7 @@ def test_train_and_save_writes_joint_finetune_checkpoint(monkeypatch, tmp_path):
         audio_loss_weight=1.0,
         visual_scale=0.5,
         audio_window_seconds=0.5,
+        audio_crop_mode="start",
         audio_loss_type="audiogs_mono_diff",
         audio_diff_weight=2.0,
         audio_use_log_mag_loss=False,
@@ -421,11 +463,14 @@ def test_train_and_save_writes_joint_finetune_checkpoint(monkeypatch, tmp_path):
     assert train_summary["source_audio"] == "near.wav"
     assert train_summary["joint_steps"] == 2
     assert train_summary["audio_window_seconds"] == 0.5
+    assert train_summary["audio_crop_mode"] == "start"
     assert summary["audio_loss_type"] == "audiogs_mono_diff"
+    assert summary["audio_crop_mode"] == "start"
     assert checkpoint["stage"] == "joint_finetune"
     assert len(checkpoint["loss_history"]) == 3
     assert checkpoint["config"]["implemented_stages"] == ["audio_warmup", "joint_finetune"]
     assert checkpoint["config"]["audio_loss_type"] == "audiogs_mono_diff"
+    assert checkpoint["config"]["audio_crop_mode"] == "start"
     assert checkpoint["config"]["audio_bandpass"]["low_hz"] == pytest.approx(150.0)
 
 
