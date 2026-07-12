@@ -1,0 +1,40 @@
+[
+  {
+    "audiogs_test_viewpoints": [
+      11
+    ],
+    "errors": [],
+    "eval_cam": "cam10",
+    "eval_cameras": [
+      "cam10"
+    ],
+    "ftgspp_eval_cameras": [
+      10
+    ],
+    "ftgspp_train_cams": 38,
+    "manifest": "/mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene1_opera_a/scene_manifest.json",
+    "ok": true,
+    "source": "near.wav",
+    "total_cams": 39,
+    "train_cams": 38
+  },
+  {
+    "audiogs_test_viewpoints": [
+      11
+    ],
+    "errors": [],
+    "eval_cam": "cam10",
+    "eval_cameras": [
+      "cam10"
+    ],
+    "ftgspp_eval_cameras": [
+      10
+    ],
+    "ftgspp_train_cams": 38,
+    "manifest": "/mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene7_playing_300_a/scene_manifest.json",
+    "ok": true,
+    "source": "near.wav",
+    "total_cams": 39,
+    "train_cams": 38
+  }
+]

@@ -151,7 +151,7 @@ def test_build_fair_comparison_rows_includes_required_methods_and_protocol_colum
     )
     _write_json(
         root / "runs/scene1_opera_c_soft_av_gaussians/train_summary.json",
-        {"joint_steps": 228, "route": "C_soft_av_gaussians"},
+        {"joint_steps": 228, "training_steps": 1228, "route": "C_soft_av_gaussians"},
     )
     strict_summary = tmp_path / "strict.json"
     _write_json(
@@ -200,6 +200,7 @@ def test_build_fair_comparison_rows_includes_required_methods_and_protocol_colum
     assert route_c["dpam_protocol"] == "sampled 8 visual-frame windows"
     assert route_c["visual_eval_frames"] == 10
     assert route_c["PSNR"] == 25.0
+    assert route_c["steps_or_clips"] == 1228
 
     out = tmp_path / "tables"
     write_fair_comparison_tables(rows, out)

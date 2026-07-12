@@ -463,7 +463,7 @@ def build_fair_comparison_rows(
                 {
                     **base,
                     "method": "AVFusion Route C soft acoustic Gaussians",
-                    "steps_or_clips": route_c_train.get("joint_steps") or route_c_audio.get("training_steps"),
+                    "steps_or_clips": route_c_train.get("training_steps") or route_c_train.get("joint_steps"),
                     "audio_eval_protocol": _audio_window_protocol(route_c_audio),
                     "dpam_protocol": _joint_dpam_protocol(route_c_audio),
                     "visual_eval_frames": route_c_visual.get("num_frames") or protocol["num_frames"],
