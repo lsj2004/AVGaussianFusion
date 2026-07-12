@@ -89,6 +89,8 @@ audio windows to avoid forcing one visual state to explain long audio segments.
 ```bash
 scripts/train_soft_av_scene1_opera.sh
 scripts/train_soft_av_scene7_playing_300.sh
+scripts/eval_soft_av_scene1_opera.sh
+scripts/eval_soft_av_scene7_playing_300.sh
 ```
 
 Route C config:
