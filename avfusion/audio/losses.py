@@ -95,6 +95,8 @@ def audiogs_mono_diff_loss(
     lre_loss_weight: float = 0.0,
     mr_stft_scales: tuple[tuple[int, int, int], ...] | None = None,
     phase_loss_weight: float = 0.0,
+    tf_diff_ratio_loss_weight: float = 0.0,
+    tf_diff_ratio_margin_db: float = 1.0,
 ) -> torch.Tensor:
     if pred.shape != target.shape:
         raise ValueError(
@@ -118,6 +120,10 @@ def audiogs_mono_diff_loss(
         raise ValueError(f"lre_loss_weight must be nonnegative, got {lre_loss_weight}")
     if phase_loss_weight < 0:
         raise ValueError(f"phase_loss_weight must be nonnegative, got {phase_loss_weight}")
+    if tf_diff_ratio_loss_weight < 0:
+        raise ValueError(
+            f"tf_diff_ratio_loss_weight must be nonnegative, got {tf_diff_ratio_loss_weight}"
+        )
 
     pred = torch.nan_to_num(pred, nan=0.0, posinf=0.0, neginf=0.0)
     target = torch.nan_to_num(target, nan=0.0, posinf=0.0, neginf=0.0)
@@ -147,6 +153,13 @@ def audiogs_mono_diff_loss(
 
         scale_loss = F.mse_loss(pred_mono_mag, target_mono_mag)
         scale_loss = scale_loss + float(diff_weight) * F.mse_loss(pred_diff_mag, target_diff_mag)
+        if tf_diff_ratio_loss_weight > 0:
+            eps = pred.new_tensor(1e-7)
+            margin = pred.new_tensor(float(tf_diff_ratio_margin_db) / 20.0)
+            pred_ratio = torch.log10((pred_diff_mag + eps) / (pred_mono_mag + eps))
+            target_ratio = torch.log10((target_diff_mag + eps) / (target_mono_mag + eps))
+            over_ratio = torch.relu(pred_ratio - target_ratio - margin)
+            scale_loss = scale_loss + float(tf_diff_ratio_loss_weight) * over_ratio.mean()
         if phase_loss_weight > 0:
             pred_spec = _stft_complex(pred, scale_n_fft, scale_hop, scale_win, window)
             target_spec = _stft_complex(target, scale_n_fft, scale_hop, scale_win, window)

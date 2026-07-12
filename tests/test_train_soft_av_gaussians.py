@@ -55,6 +55,31 @@ def test_soft_config_defaults_to_short_centered_audio_window(tmp_path):
     assert cfg.audio_guard_relative_drop == 0.05
 
 
+def test_soft_config_reads_tf_diff_ratio_loss_controls(tmp_path):
+    config_path = tmp_path / "route_c.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "paths:",
+                "  manifest: /data/scene_manifest.json",
+                "  ftgspp_checkpoint: /data/gaussians.pt",
+                "  output_checkpoint: /out/soft.pt",
+                "losses:",
+                "  audio_lre_loss_weight: 0.2",
+                "  audio_tf_diff_ratio_loss_weight: 0.05",
+                "  audio_tf_diff_ratio_margin_db: 1.0",
+            ]
+        )
+        + "\n"
+    )
+
+    cfg = resolve_soft_training_config(build_arg_parser().parse_args(["--config", str(config_path)]))
+
+    assert cfg.audio_lre_loss_weight == 0.2
+    assert cfg.audio_tf_diff_ratio_loss_weight == 0.05
+    assert cfg.audio_tf_diff_ratio_margin_db == 1.0
+
+
 def test_soft_config_rejects_long_default_route_c_window(tmp_path):
     config_path = tmp_path / "route_c.yaml"
     config_path.write_text(

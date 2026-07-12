@@ -47,6 +47,8 @@ class SoftTrainingConfig:
     audio_loss_type: str = "audiogs_mono_diff"
     audio_diff_weight: float = 0.5
     audio_lre_loss_weight: float = 0.075
+    audio_tf_diff_ratio_loss_weight: float = 0.0
+    audio_tf_diff_ratio_margin_db: float = 1.0
     audio_bandpass: dict[str, float | bool] | None = None
     config: str | None = None
 
@@ -152,6 +154,8 @@ def resolve_soft_training_config(args: argparse.Namespace) -> SoftTrainingConfig
         audio_loss_type=str(train.get("audio_loss_type", "audiogs_mono_diff")),
         audio_diff_weight=float(losses.get("audio_diff_weight", 0.5)),
         audio_lre_loss_weight=float(losses.get("audio_lre_loss_weight", 0.075)),
+        audio_tf_diff_ratio_loss_weight=float(losses.get("audio_tf_diff_ratio_loss_weight", 0.0)),
+        audio_tf_diff_ratio_margin_db=float(losses.get("audio_tf_diff_ratio_margin_db", 1.0)),
         audio_bandpass=dict(audio_bandpass) if isinstance(audio_bandpass, dict) else None,
         config=args.config,
     )
@@ -175,6 +179,8 @@ def compute_audio_training_loss(
             target,
             diff_weight=cfg.audio_diff_weight,
             lre_loss_weight=cfg.audio_lre_loss_weight,
+            tf_diff_ratio_loss_weight=cfg.audio_tf_diff_ratio_loss_weight,
+            tf_diff_ratio_margin_db=cfg.audio_tf_diff_ratio_margin_db,
         )
     raise ValueError(f"unknown audio_loss_type {cfg.audio_loss_type!r}")
 

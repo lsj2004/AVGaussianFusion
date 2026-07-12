@@ -97,3 +97,38 @@ def test_audiogs_mono_diff_loss_supports_mr_stft_and_phase_loss():
     loss.backward()
     assert pred.grad is not None
     assert pred.grad.abs().sum() > 0
+
+
+def test_audiogs_mono_diff_loss_penalizes_over_amplified_tf_diff_ratio():
+    base = torch.sin(torch.linspace(0, 12.0, 4096))
+    target = torch.stack([1.05 * base, 0.95 * base])
+    pred_overdiff = torch.stack([1.4 * base, 0.6 * base]).requires_grad_(True)
+    pred_matched = target.clone().requires_grad_(True)
+
+    overdiff_loss = audiogs_mono_diff_loss(
+        pred_overdiff,
+        target,
+        n_fft=256,
+        hop_length=64,
+        win_length=256,
+        diff_weight=0.0,
+        lre_loss_weight=0.0,
+        tf_diff_ratio_loss_weight=0.1,
+        tf_diff_ratio_margin_db=0.0,
+    )
+    matched_loss = audiogs_mono_diff_loss(
+        pred_matched,
+        target,
+        n_fft=256,
+        hop_length=64,
+        win_length=256,
+        diff_weight=0.0,
+        lre_loss_weight=0.0,
+        tf_diff_ratio_loss_weight=0.1,
+        tf_diff_ratio_margin_db=0.0,
+    )
+
+    assert overdiff_loss > matched_loss
+    overdiff_loss.backward()
+    assert pred_overdiff.grad is not None
+    assert pred_overdiff.grad.abs().sum() > 0

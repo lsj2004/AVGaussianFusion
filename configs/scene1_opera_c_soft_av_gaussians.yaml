@@ -34,7 +34,9 @@ losses:
   activity_weight: 0.0001
   sparse_weight: 0.00001
   audio_diff_weight: 0.5
-  audio_lre_loss_weight: 0.075
+  audio_lre_loss_weight: 0.2
+  audio_tf_diff_ratio_loss_weight: 0.05
+  audio_tf_diff_ratio_margin_db: 1.0
   audio_bandpass:
     enable: true
     low_hz: 150.0
