@@ -8,7 +8,7 @@ paths:
   output_dir: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene7_playing_300_c_soft_av_gaussians
   manifest: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene7_playing_300_a/scene_manifest.json
   ftgspp_checkpoint: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene7_playing_300_a/ftgspp/Scene7playing/00/gaussians.pt
-  ftgspp_memmap: /mnt/sda/lisujing/Dataset/FreeTimeGSPlusPlus/_memmap/avgaussianfusion_scene7_playing_300_a/Scene7playing
+  ftgspp_memmap: /mnt/sda/lisujing/Dataset/FreeTimeGSPlusPlus/_memmap/avgaussianfusion_scene7_playing_a/Scene7playing
   output_checkpoint: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene7_playing_300_c_soft_av_gaussians/soft_av.pt
 
 train:
