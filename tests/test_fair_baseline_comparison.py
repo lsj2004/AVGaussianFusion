@@ -130,6 +130,29 @@ def test_build_fair_comparison_rows_includes_required_methods_and_protocol_colum
             root / f"runs/{run_name}/train_summary.json",
             {"joint_steps": 228, "warmup_steps": 1000 if "no_warmup" not in run_name else 0},
         )
+    _write_json(
+        root / "runs/scene1_opera_c_soft_av_gaussians/eval/audio_summary.json",
+        {
+            "route": "C_soft_av_gaussians",
+            "renderer_type": "frequency_transfer",
+            "camera": "cam10",
+            "MAG": 0.31,
+            "ENV": 0.41,
+            "LRE": 0.51,
+            "DPAM": 0.61,
+            "DPAM_available": True,
+            "dpam_num_windows": 8,
+            "RTE": None,
+            "num_windows": 10,
+            "requested_windows": 10,
+            "audio_window_seconds": 0.5,
+            "audio_eval_protocol": "visual_center_skip_padding",
+        },
+    )
+    _write_json(
+        root / "runs/scene1_opera_c_soft_av_gaussians/train_summary.json",
+        {"joint_steps": 228, "route": "C_soft_av_gaussians"},
+    )
     strict_summary = tmp_path / "strict.json"
     _write_json(
         strict_summary,
@@ -151,6 +174,7 @@ def test_build_fair_comparison_rows_includes_required_methods_and_protocol_colum
                 "route_a_run": "scene1_opera_a",
                 "route_b_run": "scene1_opera_b_joint_av_fair",
                 "route_b_no_warmup_run": "scene1_opera_b_joint_av_no_warmup_fair",
+                "route_c_run": "scene1_opera_c_soft_av_gaussians",
                 "ftgspp_scene": "scene1_opera",
                 "strict_audiogs_summary": str(strict_summary),
                 "strict_audiogs_artifact": str(tmp_path),
@@ -164,12 +188,18 @@ def test_build_fair_comparison_rows_includes_required_methods_and_protocol_colum
     assert ("scene1_opera", "AVFusion joint warmup") in methods
     assert ("scene1_opera", "AVFusion joint no warmup") in methods
     assert ("scene1_opera", "AVFusion Route A frozen visual + audio head") in methods
+    assert ("scene1_opera", "AVFusion Route C soft acoustic Gaussians") in methods
     assert all(row["train_cams"] == 38 for row in rows)
     assert all(row["test_cam"] == "cam10" for row in rows)
     assert all(row["source"] == "near.wav" for row in rows)
     assert rows[0]["audio_eval_protocol"]
     joint_rows = [row for row in rows if str(row["method"]).startswith("AVFusion joint")]
     assert all(row["dpam_protocol"] == "sampled 16 visual-frame windows" for row in joint_rows)
+    route_c = next(row for row in rows if row["method"] == "AVFusion Route C soft acoustic Gaussians")
+    assert route_c["audio_eval_protocol"] == "AVFusion timed visual-frame audio window average (skip padding)"
+    assert route_c["dpam_protocol"] == "sampled 8 visual-frame windows"
+    assert route_c["visual_eval_frames"] == 10
+    assert route_c["PSNR"] == 25.0
 
     out = tmp_path / "tables"
     write_fair_comparison_tables(rows, out)

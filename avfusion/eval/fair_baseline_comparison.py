@@ -45,6 +45,7 @@ DEFAULT_DATASETS = [
         "route_b_no_warmup_run": "scene1_opera_b_joint_av_no_warmup_fair",
         "route_b_spectral_no_warmup_run": "scene1_opera_b_joint_av_spectral_no_warmup",
         "route_b_spectral_strict_audiogs_run": "scene1_opera_b_joint_av_spectral_no_warmup_audiogs_strict",
+        "route_c_run": "scene1_opera_c_soft_av_gaussians",
         "ftgspp_scene": "scene1_opera",
         "ftgspp_config": "configs/ftgspp_scene1_opera/scene1_opera.toml",
         "strict_audiogs_summary": "/mnt/sda/lisujing/Dataset/audioGS-replay/runs/strict_audiogs_cam10_allcams/strict_audiogs_cam10_allcams_summary.json",
@@ -57,6 +58,7 @@ DEFAULT_DATASETS = [
         "route_b_no_warmup_run": "scene7_playing_300_b_joint_av_no_warmup_fair",
         "route_b_spectral_no_warmup_run": "scene7_playing_300_b_joint_av_spectral_no_warmup",
         "route_b_spectral_strict_audiogs_run": "scene7_playing_300_b_joint_av_spectral_no_warmup_audiogs_strict",
+        "route_c_run": "scene7_playing_300_c_soft_av_gaussians",
         "ftgspp_scene": "Scene7playing",
         "ftgspp_config": "configs/ftgspp_scene7_playing_300/Scene7playing.toml",
         "strict_audiogs_summary": "/mnt/sda/lisujing/Dataset/audioGS-replay/runs/strict_audiogs_cam10_allcams/strict_audiogs_cam10_allcams_summary.json",
@@ -232,6 +234,17 @@ def _joint_dpam_protocol(audio_summary: dict[str, Any]) -> str:
     return "not_available"
 
 
+def _audio_window_protocol(audio_summary: dict[str, Any]) -> str:
+    protocol = audio_summary.get("audio_eval_protocol")
+    if protocol == "visual_center":
+        return "AVFusion timed visual-frame audio window average"
+    if protocol == "visual_center_skip_padding":
+        return "AVFusion timed visual-frame audio window average (skip padding)"
+    if protocol == "audiogs_start_nonoverlap":
+        return "AVFusion AudioGS-style non-overlap audio window average"
+    return "AVFusion timed visual-frame audio window average"
+
+
 def build_fair_comparison_rows(
     root: str | Path,
     datasets: Sequence[dict[str, Any]] | None = None,
@@ -255,6 +268,8 @@ def build_fair_comparison_rows(
             if route_b_spectral_strict_audiogs_run is not None
             else None
         )
+        route_c_run = spec.get("route_c_run")
+        route_c_run = str(route_c_run) if route_c_run is not None else None
         protocol = _manifest_protocol(root, route_a_run)
         route_a_audio = _run_summary(root / "runs" / route_a_run / "eval_avcloud" / "audio_summary.json")
         if not route_a_audio:
@@ -297,6 +312,12 @@ def build_fair_comparison_rows(
             spectral_strict_train = _run_summary(
                 root / "runs" / route_b_spectral_strict_audiogs_run / "train_summary.json"
             )
+        route_c_audio = {}
+        route_c_visual = route_a_visual
+        route_c_train = {}
+        if route_c_run is not None:
+            route_c_audio = _run_summary(root / "runs" / route_c_run / "eval" / "audio_summary.json")
+            route_c_train = _run_summary(root / "runs" / route_c_run / "train_summary.json")
 
         base = {
             "dataset": dataset,
@@ -435,6 +456,26 @@ def build_fair_comparison_rows(
                     "MSE": spectral_strict_visual.get("MSE"),
                     "L1": spectral_strict_visual.get("L1"),
                     "artifact": _artifact(root / "runs" / route_b_spectral_strict_audiogs_run),
+                }
+            )
+        if route_c_run is not None and (root / "runs" / route_c_run).exists():
+            rows.append(
+                {
+                    **base,
+                    "method": "AVFusion Route C soft acoustic Gaussians",
+                    "steps_or_clips": route_c_train.get("joint_steps") or route_c_audio.get("training_steps"),
+                    "audio_eval_protocol": _audio_window_protocol(route_c_audio),
+                    "dpam_protocol": _joint_dpam_protocol(route_c_audio),
+                    "visual_eval_frames": route_c_visual.get("num_frames") or protocol["num_frames"],
+                    "MAG": route_c_audio.get("MAG"),
+                    "ENV": route_c_audio.get("ENV"),
+                    "LRE": route_c_audio.get("LRE"),
+                    "DPAM": route_c_audio.get("DPAM"),
+                    "RTE": route_c_audio.get("RTE"),
+                    "PSNR": _metric_value(route_c_visual, "PSNR_mean", "PSNR"),
+                    "MSE": _metric_value(route_c_visual, "MSE_mean", "MSE"),
+                    "L1": _metric_value(route_c_visual, "L1_mean", "L1"),
+                    "artifact": _artifact(root / "runs" / route_c_run),
                 }
             )
     return rows

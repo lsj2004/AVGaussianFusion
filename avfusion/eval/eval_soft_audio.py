@@ -197,28 +197,34 @@ def evaluate_soft_audio_checkpoint(
 
     pred_all = torch.cat(preds, dim=-1)
     target_all = torch.cat(targets, dim=-1)
+    debug = {
+        "l1_waveform": float(torch.nn.functional.l1_loss(pred_all, target_all).item()),
+        "stft_magnitude": float(0.0),
+    }
     summary = _average_window_metrics(window_metrics)
     summary.update(
         {
             "route": "C_soft_av_gaussians",
             "renderer_type": checkpoint.get("renderer_type", "frequency_transfer"),
             "checkpoint": str(checkpoint_path),
+            "stage": str(checkpoint.get("stage", "unknown")),
             "camera": camera,
-            "num_windows": len(window_metrics),
+            "num_windows": int(len(eval_items)),
+            "requested_windows": int(limit),
+            "skipped_padding_windows": int(
+                skipped_padding_windows if audio_eval_protocol == "visual_center_skip_padding" else 0
+            ),
             "sample_rate": audio_cropper.sample_rate,
-            "audio_window_seconds": window_seconds,
+            "audio_window_seconds": float(window_seconds),
             "audio_eval_protocol": audio_eval_protocol,
             "window_metrics": window_metrics,
-            "concatenated_overlapping_debug": {
-                "l1_waveform": float(torch.nn.functional.l1_loss(pred_all, target_all).item()),
-                "stft_magnitude": float(0.0),
-            },
+            "concatenated_overlapping_debug": debug,
         }
     )
-    if audio_eval_protocol == "visual_center_skip_padding":
-        summary["skipped_padding_windows"] = int(locals().get("skipped_padding_windows", 0))
     if include_dpam:
         _attach_sampled_dpam_metrics(summary, dpam_window_metrics)
+    else:
+        summary["dpam_num_windows"] = 0
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "audio_summary.json").write_text(

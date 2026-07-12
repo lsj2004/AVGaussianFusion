@@ -96,9 +96,14 @@ def test_evaluate_soft_audio_checkpoint_writes_metrics(monkeypatch, tmp_path):
 
     assert summary["route"] == "C_soft_av_gaussians"
     assert summary["renderer_type"] == "frequency_transfer"
+    assert summary["stage"] == "unknown"
     assert summary["camera"] == "cam10"
     assert summary["num_windows"] == 2
+    assert summary["requested_windows"] == 2
+    assert summary["skipped_padding_windows"] == 0
+    assert summary["dpam_num_windows"] == 0
     assert summary["audio_window_seconds"] == 0.5
+    assert summary["audio_eval_protocol"] == "visual_center"
     assert metric_lengths == [8000, 8000]
     assert summary["MAG"] == 1.0
     assert json.loads((tmp_path / "eval" / "audio_summary.json").read_text())["route"] == "C_soft_av_gaussians"
