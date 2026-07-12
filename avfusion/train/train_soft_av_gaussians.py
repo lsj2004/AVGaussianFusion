@@ -9,7 +9,7 @@ from typing import Any
 import torch
 import yaml
 
-from avfusion.audio import audiogs_mono_diff_loss, stft_magnitude_loss
+from avfusion.audio import audiogs_mono_diff_loss, audio_spatial_loss, stft_magnitude_loss
 from avfusion.data.audio_video_dataset import TimedAudioCropper
 from avfusion.data.visual_frame_dataset import FrameReader, VisualFrameDataset
 from avfusion.joint.ftgspp_bridge import FTGSRendererBridge
@@ -42,6 +42,7 @@ class SoftTrainingConfig:
     audio_weight: float
     visual_guard_psnr_drop_db: float
     audio_guard_relative_drop: float
+    audio_renderer_use_phase_delay: bool = False
     ftgspp_memmap: str | None = None
     visual_scale: float = 0.125
     audio_loss_type: str = "audiogs_mono_diff"
@@ -49,8 +50,14 @@ class SoftTrainingConfig:
     audio_lre_loss_weight: float = 0.075
     audio_tf_diff_ratio_loss_weight: float = 0.0
     audio_tf_diff_ratio_margin_db: float = 1.0
+    audio_band_lre_loss_weight: float = 0.0
+    audio_coherence_loss_weight: float = 0.0
+    audio_phase_diff_loss_weight: float = 0.0
+    audio_energy_balance_loss_weight: float = 0.0
     diff_response_l2_weight: float = 0.0
     diff_response_smooth_weight: float = 0.0
+    side_response_l2_weight: float = 0.0
+    side_response_smooth_weight: float = 0.0
     audio_bandpass: dict[str, float | bool] | None = None
     config: str | None = None
 
@@ -142,6 +149,7 @@ def resolve_soft_training_config(args: argparse.Namespace) -> SoftTrainingConfig
         shared_lr=float(train.get("shared_lr", 0.0)),
         audio_window_seconds=audio_window_seconds,
         audio_crop_mode=str(train.get("audio_crop_mode", "center")),
+        audio_renderer_use_phase_delay=bool(train.get("audio_renderer_use_phase_delay", False)),
         anchored_fraction=float(train.get("anchored_fraction", 0.6)),
         dynamic_fraction=float(train.get("dynamic_fraction", 0.2)),
         anchor_weight=float(losses.get("anchor_weight", 1e-3)),
@@ -158,8 +166,14 @@ def resolve_soft_training_config(args: argparse.Namespace) -> SoftTrainingConfig
         audio_lre_loss_weight=float(losses.get("audio_lre_loss_weight", 0.075)),
         audio_tf_diff_ratio_loss_weight=float(losses.get("audio_tf_diff_ratio_loss_weight", 0.0)),
         audio_tf_diff_ratio_margin_db=float(losses.get("audio_tf_diff_ratio_margin_db", 1.0)),
+        audio_band_lre_loss_weight=float(losses.get("audio_band_lre_loss_weight", 0.0)),
+        audio_coherence_loss_weight=float(losses.get("audio_coherence_loss_weight", 0.0)),
+        audio_phase_diff_loss_weight=float(losses.get("audio_phase_diff_loss_weight", 0.0)),
+        audio_energy_balance_loss_weight=float(losses.get("audio_energy_balance_loss_weight", 0.0)),
         diff_response_l2_weight=float(losses.get("diff_response_l2_weight", 0.0)),
         diff_response_smooth_weight=float(losses.get("diff_response_smooth_weight", 0.0)),
+        side_response_l2_weight=float(losses.get("side_response_l2_weight", 0.0)),
+        side_response_smooth_weight=float(losses.get("side_response_smooth_weight", 0.0)),
         audio_bandpass=dict(audio_bandpass) if isinstance(audio_bandpass, dict) else None,
         config=args.config,
     )
@@ -178,7 +192,7 @@ def compute_audio_training_loss(
     if cfg.audio_loss_type == "stft_log_l1":
         return stft_magnitude_loss(pred, target)
     if cfg.audio_loss_type == "audiogs_mono_diff":
-        return audiogs_mono_diff_loss(
+        loss = audiogs_mono_diff_loss(
             pred,
             target,
             diff_weight=cfg.audio_diff_weight,
@@ -186,6 +200,24 @@ def compute_audio_training_loss(
             tf_diff_ratio_loss_weight=cfg.audio_tf_diff_ratio_loss_weight,
             tf_diff_ratio_margin_db=cfg.audio_tf_diff_ratio_margin_db,
         )
+        if any(
+            weight > 0
+            for weight in (
+                cfg.audio_band_lre_loss_weight,
+                cfg.audio_coherence_loss_weight,
+                cfg.audio_phase_diff_loss_weight,
+                cfg.audio_energy_balance_loss_weight,
+            )
+        ):
+            loss = loss + audio_spatial_loss(
+                pred,
+                target,
+                band_lre_weight=cfg.audio_band_lre_loss_weight,
+                coherence_weight=cfg.audio_coherence_loss_weight,
+                phase_diff_weight=cfg.audio_phase_diff_loss_weight,
+                energy_weight=cfg.audio_energy_balance_loss_weight,
+            )
+        return loss
     raise ValueError(f"unknown audio_loss_type {cfg.audio_loss_type!r}")
 
 
@@ -201,11 +233,15 @@ def compute_total_soft_loss(
     coupling = soft_coupling_losses(acoustic_field, acoustic_state, visual_state)
     coupling_scale = float(coupling_scale)
     diff_response = acoustic_state["diff_response"]
+    side_response = acoustic_state.get("side_response", diff_response.new_zeros(diff_response.shape))
     diff_response_l2 = diff_response.square().mean()
+    side_response_l2 = side_response.square().mean()
     if diff_response.shape[-1] > 1:
         diff_response_smooth = (diff_response[..., 1:] - diff_response[..., :-1]).square().mean()
+        side_response_smooth = (side_response[..., 1:] - side_response[..., :-1]).square().mean()
     else:
         diff_response_smooth = diff_response.new_zeros(())
+        side_response_smooth = side_response.new_zeros(())
     total = (
         cfg.audio_weight * audio_loss
         + cfg.rgb_weight * rgb_loss
@@ -215,6 +251,8 @@ def compute_total_soft_loss(
         + cfg.sparse_weight * coupling["sparse"]
         + cfg.diff_response_l2_weight * diff_response_l2
         + cfg.diff_response_smooth_weight * diff_response_smooth
+        + cfg.side_response_l2_weight * side_response_l2
+        + cfg.side_response_smooth_weight * side_response_smooth
     )
     return {
         "total": total,
@@ -226,6 +264,8 @@ def compute_total_soft_loss(
         "sparse": coupling["sparse"].detach(),
         "diff_response_l2": diff_response_l2.detach(),
         "diff_response_smooth": diff_response_smooth.detach(),
+        "side_response_l2": side_response_l2.detach(),
+        "side_response_smooth": side_response_smooth.detach(),
         "coupling_scale": audio_loss.new_tensor(coupling_scale),
     }
 
@@ -281,7 +321,7 @@ def train_soft_av_gaussians(
         anchored_fraction=cfg.anchored_fraction,
         dynamic_fraction=cfg.dynamic_fraction,
     ).to(device)
-    audio_renderer = FrequencyTransferRenderer().to(device)
+    audio_renderer = FrequencyTransferRenderer(use_phase_delay=cfg.audio_renderer_use_phase_delay).to(device)
     for parameter in bridge.gaussians.parameters():
         parameter.requires_grad_(False)
 

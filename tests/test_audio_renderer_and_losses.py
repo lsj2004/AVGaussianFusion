@@ -3,8 +3,9 @@ import torch
 
 from avfusion.adapters.visual_to_acoustic import AcousticCarrier
 from avfusion.audio.acoustic_gaussians import AcousticGaussianParameters
-from avfusion.audio.losses import audiogs_mono_diff_loss, stft_magnitude_loss
+from avfusion.audio.losses import audiogs_mono_diff_loss, audio_spatial_loss, stft_magnitude_loss
 from avfusion.audio.renderer import render_audio
+from avfusion.soft.frequency_transfer_renderer import FrequencyTransferRenderer
 
 
 def test_renderer_outputs_stereo_waveform_and_optimizable_params():
@@ -132,3 +133,85 @@ def test_audiogs_mono_diff_loss_penalizes_over_amplified_tf_diff_ratio():
     overdiff_loss.backward()
     assert pred_overdiff.grad is not None
     assert pred_overdiff.grad.abs().sum() > 0
+
+
+def test_audio_spatial_loss_penalizes_stereo_errors():
+    base = torch.sin(torch.linspace(0, 24.0, 4096))
+    target = torch.stack([1.2 * base, 0.8 * base])
+    matched = target.clone().requires_grad_(True)
+    swapped = torch.stack([0.8 * base, 1.2 * base]).requires_grad_(True)
+
+    matched_loss = audio_spatial_loss(
+        matched,
+        target,
+        band_lre_weight=1.0,
+        coherence_weight=0.1,
+        phase_diff_weight=0.1,
+        energy_weight=0.1,
+        n_fft=256,
+        hop_length=64,
+        win_length=256,
+    )
+    swapped_loss = audio_spatial_loss(
+        swapped,
+        target,
+        band_lre_weight=1.0,
+        coherence_weight=0.1,
+        phase_diff_weight=0.1,
+        energy_weight=0.1,
+        n_fft=256,
+        hop_length=64,
+        win_length=256,
+    )
+
+    assert matched_loss < 1e-6
+    assert swapped_loss > matched_loss + 0.1
+    swapped_loss.backward()
+    assert swapped.grad is not None
+    assert swapped.grad.abs().sum() > 0
+
+
+def test_frequency_transfer_renderer_preserves_source_side_channel():
+    renderer = FrequencyTransferRenderer(n_fft=256, hop_length=64, win_length=256)
+    state = {
+        "xyz": torch.zeros(4, 3),
+        "opacity": torch.zeros(4, 1),
+        "audio_opacity": torch.zeros(4, 1),
+        "mono_response": torch.zeros(4, renderer.num_frequency_bins),
+        "diff_response": torch.zeros(4, renderer.num_frequency_bins),
+        "distance_decay": torch.zeros(4, renderer.num_frequency_bins),
+        "phase_delay": torch.zeros(4, renderer.num_frequency_bins),
+    }
+    base = torch.sin(torch.linspace(0, 24.0, 4096))
+    source = torch.stack([1.25 * base, 0.75 * base])
+
+    pred, debug = renderer(state, source, return_debug=True)
+
+    assert pred.shape == source.shape
+    assert not torch.allclose(pred[0], pred[1], atol=1e-4)
+    assert torch.mean(torch.abs(pred - source)) < 1e-3
+    assert "mid_transfer" in debug
+    assert "side_transfer" in debug
+    assert "diff_transfer" in debug
+
+
+def test_frequency_transfer_renderer_uses_learnable_side_response():
+    renderer = FrequencyTransferRenderer(n_fft=256, hop_length=64, win_length=256)
+    base_state = {
+        "xyz": torch.zeros(4, 3),
+        "opacity": torch.zeros(4, 1),
+        "audio_opacity": torch.zeros(4, 1),
+        "mono_response": torch.zeros(4, renderer.num_frequency_bins),
+        "diff_response": torch.zeros(4, renderer.num_frequency_bins),
+        "distance_decay": torch.zeros(4, renderer.num_frequency_bins),
+        "phase_delay": torch.zeros(4, renderer.num_frequency_bins),
+    }
+    reduced_side_state = dict(base_state)
+    reduced_side_state["side_response"] = torch.full((4, renderer.num_frequency_bins), -2.0)
+    base = torch.sin(torch.linspace(0, 24.0, 4096))
+    source = torch.stack([1.25 * base, 0.75 * base])
+
+    original_side = renderer(base_state, source)[0] - renderer(base_state, source)[1]
+    reduced_side = renderer(reduced_side_state, source)[0] - renderer(reduced_side_state, source)[1]
+
+    assert reduced_side.abs().mean() < original_side.abs().mean()

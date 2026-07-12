@@ -183,3 +183,79 @@ def audiogs_mono_diff_loss(
         )
         loss = loss + float(lre_loss_weight) * lre_loss
     return loss
+
+
+def audio_spatial_loss(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    n_fft: int = 512,
+    hop_length: int = 160,
+    win_length: int = 400,
+    band_lre_weight: float = 0.0,
+    coherence_weight: float = 0.0,
+    phase_diff_weight: float = 0.0,
+    energy_weight: float = 0.0,
+) -> torch.Tensor:
+    if pred.shape != target.shape:
+        raise ValueError(
+            f"shape mismatch: pred={tuple(pred.shape)} target={tuple(target.shape)}"
+        )
+    if pred.ndim != 2 or pred.shape[0] != 2:
+        raise ValueError(f"audio tensors must have shape (2, samples), got {tuple(pred.shape)}")
+    if pred.shape[-1] < n_fft:
+        raise ValueError(f"audio length {pred.shape[-1]} is shorter than n_fft={n_fft}")
+    for name, value in {
+        "band_lre_weight": band_lre_weight,
+        "coherence_weight": coherence_weight,
+        "phase_diff_weight": phase_diff_weight,
+        "energy_weight": energy_weight,
+    }.items():
+        if value < 0:
+            raise ValueError(f"{name} must be nonnegative, got {value}")
+
+    pred = torch.nan_to_num(pred, nan=0.0, posinf=0.0, neginf=0.0).clamp(-2.0, 2.0)
+    target = torch.nan_to_num(target, nan=0.0, posinf=0.0, neginf=0.0).clamp(-2.0, 2.0)
+    loss = pred.new_zeros(())
+    eps = pred.new_tensor(1e-7)
+
+    if band_lre_weight > 0 or phase_diff_weight > 0:
+        window = torch.hamming_window(win_length, device=pred.device, dtype=pred.dtype)
+        pred_l_spec = _stft_complex(pred[0:1], n_fft, hop_length, win_length, window)[0]
+        pred_r_spec = _stft_complex(pred[1:2], n_fft, hop_length, win_length, window)[0]
+        target_l_spec = _stft_complex(target[0:1], n_fft, hop_length, win_length, window)[0]
+        target_r_spec = _stft_complex(target[1:2], n_fft, hop_length, win_length, window)[0]
+
+        if band_lre_weight > 0:
+            pred_ratio = torch.log10((pred_l_spec.abs().square() + eps) / (pred_r_spec.abs().square() + eps))
+            target_ratio = torch.log10((target_l_spec.abs().square() + eps) / (target_r_spec.abs().square() + eps))
+            band_lre = F.l1_loss(
+                torch.nan_to_num(pred_ratio, nan=0.0, posinf=0.0, neginf=0.0),
+                torch.nan_to_num(target_ratio, nan=0.0, posinf=0.0, neginf=0.0),
+            )
+            loss = loss + float(band_lre_weight) * band_lre
+
+        if phase_diff_weight > 0:
+            pred_phase_diff = torch.angle(pred_l_spec) - torch.angle(pred_r_spec)
+            target_phase_diff = torch.angle(target_l_spec) - torch.angle(target_r_spec)
+            phase_diff = F.l1_loss(
+                torch.cos(torch.nan_to_num(pred_phase_diff, nan=0.0, posinf=0.0, neginf=0.0)),
+                torch.cos(torch.nan_to_num(target_phase_diff, nan=0.0, posinf=0.0, neginf=0.0)),
+            )
+            loss = loss + float(phase_diff_weight) * phase_diff
+
+    if coherence_weight > 0:
+        pred_coherence = F.cosine_similarity(pred[0], pred[1], dim=0, eps=1e-8)
+        target_coherence = F.cosine_similarity(target[0], target[1], dim=0, eps=1e-8)
+        coherence = F.l1_loss(
+            torch.nan_to_num(pred_coherence, nan=0.0, posinf=0.0, neginf=0.0),
+            torch.nan_to_num(target_coherence, nan=0.0, posinf=0.0, neginf=0.0),
+        )
+        loss = loss + float(coherence_weight) * coherence
+
+    if energy_weight > 0:
+        pred_energy = pred.square().sum()
+        target_energy = target.square().sum()
+        energy = F.l1_loss(torch.log10(pred_energy + eps), torch.log10(target_energy + eps))
+        loss = loss + float(energy_weight) * energy
+
+    return torch.nan_to_num(loss, nan=0.0, posinf=0.0, neginf=0.0)

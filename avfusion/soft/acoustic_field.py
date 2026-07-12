@@ -20,6 +20,7 @@ class AcousticGaussianField(nn.Module):
         audio_opacity: Tensor | None = None,
         mono_response: Tensor | None = None,
         diff_response: Tensor | None = None,
+        side_response: Tensor | None = None,
         distance_decay: Tensor | None = None,
         phase_delay: Tensor | None = None,
     ):
@@ -49,6 +50,8 @@ class AcousticGaussianField(nn.Module):
             mono_response = torch.zeros(num_points, 257, dtype=means.dtype, device=means.device)
         if diff_response is None:
             diff_response = torch.zeros_like(mono_response)
+        if side_response is None:
+            side_response = torch.zeros_like(mono_response)
         if distance_decay is None:
             distance_decay = torch.zeros_like(mono_response)
         if phase_delay is None:
@@ -59,6 +62,8 @@ class AcousticGaussianField(nn.Module):
             raise ValueError("mono_response must have shape (N, F)")
         if diff_response.shape != mono_response.shape:
             raise ValueError("diff_response must match mono_response")
+        if side_response.shape != mono_response.shape:
+            raise ValueError("side_response must match mono_response")
         if distance_decay.shape != mono_response.shape:
             raise ValueError("distance_decay must match mono_response")
         if phase_delay.shape != mono_response.shape:
@@ -73,6 +78,7 @@ class AcousticGaussianField(nn.Module):
         self.audio_opacity = nn.Parameter(audio_opacity.float())
         self.mono_response = nn.Parameter(mono_response.float())
         self.diff_response = nn.Parameter(diff_response.float())
+        self.side_response = nn.Parameter(side_response.float())
         self.distance_decay = nn.Parameter(distance_decay.float())
         self.phase_delay = nn.Parameter(phase_delay.float())
         self.register_buffer("anchor_indices", anchor_indices.long(), persistent=True)
@@ -137,6 +143,7 @@ class AcousticGaussianField(nn.Module):
         mono_response = torch.zeros(num_points, num_frequency_bins, dtype=torch.float32)
         freq = torch.linspace(-0.5, 0.5, num_frequency_bins, dtype=torch.float32).reshape(1, num_frequency_bins)
         diff_response = 1e-3 * freq.repeat(num_points, 1)
+        side_response = torch.zeros(num_points, num_frequency_bins, dtype=torch.float32)
         distance_decay = torch.zeros(num_points, num_frequency_bins, dtype=torch.float32)
         phase_delay = torch.zeros(num_points, num_frequency_bins, dtype=torch.float32)
 
@@ -158,6 +165,7 @@ class AcousticGaussianField(nn.Module):
             audio_opacity=audio_opacity,
             mono_response=mono_response,
             diff_response=diff_response,
+            side_response=side_response,
             distance_decay=distance_decay,
             phase_delay=phase_delay,
         )
@@ -174,6 +182,7 @@ class AcousticGaussianField(nn.Module):
             "audio_opacity": self.audio_opacity,
             "mono_response": self.mono_response,
             "diff_response": self.diff_response,
+            "side_response": self.side_response,
             "distance_decay": self.distance_decay,
             "phase_delay": self.phase_delay,
         }
@@ -202,7 +211,7 @@ class AcousticGaussianField(nn.Module):
             "anchor_mask": state["anchor_mask"],
             "residual_mask": state["residual_mask"],
         }
-        for key in ("audio_opacity", "mono_response", "diff_response", "distance_decay", "phase_delay"):
+        for key in ("audio_opacity", "mono_response", "diff_response", "side_response", "distance_decay", "phase_delay"):
             if key in state:
                 kwargs[key] = state[key]
         field = cls(**kwargs)

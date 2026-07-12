@@ -163,9 +163,16 @@ def test_route_c_stereo_regularization_configs_use_separate_outputs_and_stronger
         assert cfg["paths"]["output_dir"].endswith(f"/runs/{run_name}")
         assert cfg["paths"]["output_checkpoint"].endswith(f"/runs/{run_name}/soft_av.pt")
         assert cfg["losses"]["audio_lre_loss_weight"] == 0.3
+        assert cfg["train"]["audio_renderer_use_phase_delay"] is False
         assert cfg["losses"]["audio_tf_diff_ratio_loss_weight"] == 0.1
+        assert cfg["losses"]["audio_band_lre_loss_weight"] == 0.2
+        assert cfg["losses"]["audio_coherence_loss_weight"] == 0.05
+        assert cfg["losses"]["audio_phase_diff_loss_weight"] == 0.02
+        assert cfg["losses"]["audio_energy_balance_loss_weight"] == 0.01
         assert cfg["losses"]["diff_response_l2_weight"] == 0.0001
         assert cfg["losses"]["diff_response_smooth_weight"] == 0.001
+        assert cfg["losses"]["side_response_l2_weight"] == 0.0001
+        assert cfg["losses"]["side_response_smooth_weight"] == 0.001
 
 
 def test_route_c_stereo_regularization_scripts_point_to_ablation_configs():
@@ -176,6 +183,46 @@ def test_route_c_stereo_regularization_scripts_point_to_ablation_configs():
     assert "scene7_playing_300_c_soft_av_gaussians_stereo_reg.yaml" in scene7_script
     assert "python -m avfusion.train.train_soft_av_gaussians" in scene1_script
     assert "python -m avfusion.train.train_soft_av_gaussians" in scene7_script
+
+
+def test_route_c_mid_side_phase_configs_enable_phase_delay():
+    expected = {
+        "scene1_opera_c_soft_av_gaussians_mid_side_phase.yaml": "scene1_opera_c_soft_av_gaussians_mid_side_phase",
+        "scene7_playing_300_c_soft_av_gaussians_mid_side_phase.yaml": "scene7_playing_300_c_soft_av_gaussians_mid_side_phase",
+    }
+    for filename, run_name in expected.items():
+        cfg = yaml.safe_load((Path("configs") / filename).read_text())
+        assert cfg["route"] == "C_soft_av_gaussians"
+        assert cfg["paths"]["output_dir"].endswith(f"/runs/{run_name}")
+        assert cfg["paths"]["output_checkpoint"].endswith(f"/runs/{run_name}/soft_av.pt")
+        assert cfg["train"]["audio_renderer_use_phase_delay"] is True
+        assert cfg["losses"]["audio_phase_diff_loss_weight"] == 0.05
+        assert cfg["losses"]["audio_band_lre_loss_weight"] == 0.2
+
+
+def test_route_c_mid_side_phase_scripts_point_to_phase_configs():
+    scene1_script = Path("scripts/train_soft_av_scene1_opera_mid_side_phase.sh").read_text()
+    scene7_script = Path("scripts/train_soft_av_scene7_playing_300_mid_side_phase.sh").read_text()
+
+    assert "scene1_opera_c_soft_av_gaussians_mid_side_phase.yaml" in scene1_script
+    assert "scene7_playing_300_c_soft_av_gaussians_mid_side_phase.yaml" in scene7_script
+    assert "python -m avfusion.train.train_soft_av_gaussians" in scene1_script
+    assert "python -m avfusion.train.train_soft_av_gaussians" in scene7_script
+
+
+def test_route_c_mid_side_phase_fulltrack_eval_scripts_write_global_audio_outputs():
+    expected = {
+        "scripts/eval_soft_av_fulltrack_scene1_opera_mid_side_phase.sh": "scene1_opera_c_soft_av_gaussians_mid_side_phase",
+        "scripts/eval_soft_av_fulltrack_scene7_playing_300_mid_side_phase.sh": "scene7_playing_300_c_soft_av_gaussians_mid_side_phase",
+    }
+    for script_path, run_name in expected.items():
+        script = Path(script_path).read_text()
+        assert "python -m avfusion.eval.eval_soft_audio_fulltrack" in script
+        assert f"runs/{run_name}" in script
+        assert "eval_fulltrack_audiogs_3s_nonoverlap" in script
+        assert "eval_fulltrack_visual_center_0p5s_ola" in script
+        assert "--protocol audiogs_3s_nonoverlap_fulltrack" in script
+        assert "--protocol visual_center_overlap_add_fulltrack" in script
 
 
 def test_route_c_fulltrack_eval_scripts_write_global_audio_outputs():

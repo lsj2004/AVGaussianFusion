@@ -45,12 +45,13 @@ class FrequencyTransferRenderer(nn.Module):
         self,
         state: dict[str, Tensor],
         camera_w2c: Tensor | None = None,
-    ) -> tuple[Tensor, Tensor, Tensor]:
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         xyz = state["xyz"]
         opacity = state["opacity"]
         audio_opacity = state["audio_opacity"]
         mono_response = state["mono_response"]
         diff_response = state["diff_response"]
+        side_response = state.get("side_response", torch.zeros_like(mono_response))
         distance_decay = state["distance_decay"]
         phase_delay = state["phase_delay"]
         if mono_response.shape[-1] != self.num_frequency_bins:
@@ -58,7 +59,11 @@ class FrequencyTransferRenderer(nn.Module):
                 f"acoustic field frequency bins {mono_response.shape[-1]} do not match "
                 f"renderer frequency bins {self.num_frequency_bins}"
             )
-        if diff_response.shape != mono_response.shape or distance_decay.shape != mono_response.shape:
+        if (
+            diff_response.shape != mono_response.shape
+            or side_response.shape != mono_response.shape
+            or distance_decay.shape != mono_response.shape
+        ):
             raise ValueError("acoustic transfer attributes must share shape (N, F)")
 
         camera_xyz = self._world_to_camera_xyz(xyz, camera_w2c)
@@ -70,10 +75,14 @@ class FrequencyTransferRenderer(nn.Module):
 
         mono = 1.0 + (activity * torch.tanh(mono_response) * attenuation).sum(dim=0)
         diff = (activity * torch.tanh(diff_response) * side * attenuation).sum(dim=0).clamp(-0.95, 0.95)
-        left_transfer = (mono * (1.0 + diff)).clamp(self.min_transfer, self.max_transfer)
-        right_transfer = (mono * (1.0 - diff)).clamp(self.min_transfer, self.max_transfer)
+        side_keep = 1.0 + (activity * torch.tanh(side_response) * attenuation).sum(dim=0)
+        mid_transfer = mono.clamp(self.min_transfer, self.max_transfer)
+        side_transfer = (mono * side_keep).clamp(self.min_transfer, self.max_transfer)
+        diff_transfer = (mono * diff).clamp(-self.max_transfer, self.max_transfer)
+        left_transfer = (mid_transfer + diff_transfer).clamp(self.min_transfer, self.max_transfer)
+        right_transfer = (mid_transfer - diff_transfer).clamp(self.min_transfer, self.max_transfer)
         phase = (activity * torch.tanh(phase_delay)).sum(dim=0)
-        return left_transfer, right_transfer, phase
+        return mid_transfer, side_transfer, diff_transfer, left_transfer, right_transfer, phase
 
     def forward(
         self,
@@ -107,20 +116,24 @@ class FrequencyTransferRenderer(nn.Module):
             return_complex=True,
         )[0]
         mid_spec = 0.5 * (spec_l + spec_r)
-        mid_mag = mid_spec.abs()
-        mid_phase = torch.nan_to_num(torch.angle(mid_spec), nan=0.0, posinf=0.0, neginf=0.0)
-        left_transfer, right_transfer, phase = self._render_transfer(state, camera_w2c=camera_w2c)
-        left_tf = left_transfer.reshape(-1, 1).expand_as(mid_mag)
-        right_tf = right_transfer.reshape(-1, 1).expand_as(mid_mag)
-        phase_tf = phase.reshape(-1, 1).expand_as(mid_mag)
+        side_spec = 0.5 * (spec_l - spec_r)
+        mid_transfer, side_transfer, diff_transfer, left_transfer, right_transfer, phase = self._render_transfer(
+            state,
+            camera_w2c=camera_w2c,
+        )
+        mid_tf = mid_transfer.reshape(-1, 1).expand_as(mid_spec)
+        side_tf = side_transfer.reshape(-1, 1).expand_as(side_spec)
+        diff_tf = diff_transfer.reshape(-1, 1).expand_as(mid_spec)
+        left_tf = left_transfer.reshape(-1, 1).expand_as(mid_spec)
+        right_tf = right_transfer.reshape(-1, 1).expand_as(mid_spec)
+        phase_tf = phase.reshape(-1, 1).expand_as(mid_spec)
         if self.use_phase_delay:
-            left_phase = mid_phase + phase_tf
-            right_phase = mid_phase - phase_tf
-        else:
-            left_phase = mid_phase
-            right_phase = mid_phase
-        left_spec = torch.polar(mid_mag * left_tf, left_phase)
-        right_spec = torch.polar(mid_mag * right_tf, right_phase)
+            mid_spec = mid_spec * torch.exp(1j * phase_tf)
+            side_spec = side_spec * torch.exp(-1j * phase_tf)
+        mid_out = mid_spec * mid_tf
+        side_out = side_spec * side_tf + mid_spec * diff_tf
+        left_spec = mid_out + side_out
+        right_spec = mid_out - side_out
         left = torch.istft(
             left_spec,
             n_fft=self.n_fft,
@@ -141,9 +154,15 @@ class FrequencyTransferRenderer(nn.Module):
         if not return_debug:
             return pred
         return pred, {
+            "mid_transfer": mid_transfer,
+            "side_transfer": side_transfer,
+            "diff_transfer": diff_transfer,
             "left_transfer": left_transfer,
             "right_transfer": right_transfer,
             "phase": phase,
+            "mid_transfer_tf": mid_tf,
+            "side_transfer_tf": side_tf,
+            "diff_transfer_tf": diff_tf,
             "left_transfer_tf": left_tf,
             "right_transfer_tf": right_tf,
         }
