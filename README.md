@@ -70,3 +70,37 @@ Route B config:
 configs/scene1_opera_b_joint_av.yaml
 configs/scene1_opera_b_joint_av_no_warmup.yaml
 ```
+
+## Route C Soft-Coupled AV Gaussians
+
+Route C is the recommended AVGaussianFusion v2 path. It keeps the FreeTimeGS++
+visual field as a base-preserving reference and trains an independent dynamic
+acoustic Gaussian transfer field. Each acoustic Gaussian carries geometry plus
+frequency-transfer attributes, and the renderer predicts `H(f; τ, listener)` for
+short-window binaural reconstruction. Acoustic points are initialized from the
+visual state, but remain trainable and are coupled to visual anchors with soft
+anchor/motion/activity losses instead of hard parameter sharing.
+
+Time alignment uses a global scene time `τ` from the visual frame. Source and
+target audio are cropped around the same `τ`, while STFT time bins remain local
+to that short audio window. The default Route C configs use 0.5-second centered
+audio windows to avoid forcing one visual state to explain long audio segments.
+
+```bash
+scripts/train_soft_av_scene1_opera.sh
+scripts/train_soft_av_scene7_playing_300.sh
+```
+
+Route C config:
+
+```bash
+configs/scene1_opera_c_soft_av_gaussians.yaml
+configs/scene7_playing_300_c_soft_av_gaussians.yaml
+```
+
+The default schedule preserves the two bases: an acoustic warmup stage runs with
+zero coupling weight, then the joint stage ramps soft coupling from 0 to 1 while
+the visual FTGS++ field remains frozen. STFT is used only as the audio
+analysis/synthesis domain: the learned transfer curve `H(f; τ, listener)` is
+broadcast over local STFT bins inside the short crop. Route B remains as the
+hard-sharing ablation.
