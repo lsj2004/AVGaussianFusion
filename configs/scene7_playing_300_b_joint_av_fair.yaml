@@ -1,36 +1,26 @@
-route: B_joint_av_spectral_no_warmup
+route: B_joint_av
 scene: Scene7playing
 
 paths:
   visual_root: /mnt/sda/lisujing/Dataset/Sampled_data/v5_0630_dynerf/Scene7playing
   audio_root: /mnt/sda/lisujing/Dataset/Sampled_data/v5_0630_audiogs_audio/Scene7playing
   route_a_run_dir: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene7_playing_300_a
-  output_dir: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene7_playing_300_b_joint_av_spectral_no_warmup
+  output_dir: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene7_playing_300_b_joint_av_fair
   manifest: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene7_playing_300_a/scene_manifest.json
   ftgspp_checkpoint: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene7_playing_300_a/ftgspp/Scene7playing/00/gaussians.pt
   ftgspp_memmap: /mnt/sda/lisujing/Dataset/FreeTimeGSPlusPlus/_memmap/avgaussianfusion_scene7_playing_a/Scene7playing
-  output_checkpoint: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene7_playing_300_b_joint_av_spectral_no_warmup/joint_finetune.pt
+  output_checkpoint: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene7_playing_300_b_joint_av_fair/joint_finetune.pt
 
 train:
-  warmup_steps: 0
-  joint_steps: 11134
+  warmup_steps: 1000
+  joint_steps: 1000
   top_k: 8192
   audio_lr: 0.0005
   shared_lr: 0.00001
   visual_scale: 0.125
   audio_window_seconds: 0.5
-  audio_head_type: spectral
-  audio_loss_type: audiogs_mono_diff
 
 losses:
   visual_weight: 1.0
   audio_weight: 1.0
   geometry_reg_weight: 0.001
-  audio_diff_weight: 2.0
-  audio_use_log_mag_loss: false
-  audio_lre_loss_weight: 0.0
-  audio_bandpass:
-    enable: true
-    low_hz: 150.0
-    high_hz: -1.0
-    order: 5

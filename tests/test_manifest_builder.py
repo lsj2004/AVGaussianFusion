@@ -126,6 +126,56 @@ def test_manifest_rejects_visual_metadata_mismatch(tmp_path):
         )
 
 
+def test_manifest_allows_num_frame_subset_from_visual_manifest(tmp_path):
+    visual = tmp_path / "visual"
+    audio = tmp_path / "audio"
+    aligned = audio / "aligned_16k_stereo"
+    visual.mkdir()
+    aligned.mkdir(parents=True)
+    for name in ("cam00", "cam01"):
+        (visual / f"{name}.mp4").write_bytes(b"")
+        _write_wav(aligned / f"{name}.wav")
+    _write_wav(aligned / "near.wav")
+    (visual / "manifest.json").write_text(
+        json.dumps({"fps": 24.0, "num_frames": 12, "camera_names": ["cam00", "cam01"]})
+    )
+
+    manifest = build_manifest(
+        scene_id="toy",
+        visual_root=visual,
+        audio_root=audio,
+        heldout_camera="cam01",
+        num_frames=5,
+    )
+
+    assert manifest.num_frames == 5
+    assert manifest.frame_times == [0.0, 1 / 24.0, 2 / 24.0, 3 / 24.0, 4 / 24.0]
+
+
+def test_manifest_rejects_num_frame_subset_longer_than_visual_manifest(tmp_path):
+    visual = tmp_path / "visual"
+    audio = tmp_path / "audio"
+    aligned = audio / "aligned_16k_stereo"
+    visual.mkdir()
+    aligned.mkdir(parents=True)
+    for name in ("cam00", "cam01"):
+        (visual / f"{name}.mp4").write_bytes(b"")
+        _write_wav(aligned / f"{name}.wav")
+    _write_wav(aligned / "near.wav")
+    (visual / "manifest.json").write_text(
+        json.dumps({"fps": 24.0, "num_frames": 12, "camera_names": ["cam00", "cam01"]})
+    )
+
+    with pytest.raises(ValueError, match="num_frames exceeds visual manifest"):
+        build_manifest(
+            scene_id="toy",
+            visual_root=visual,
+            audio_root=audio,
+            heldout_camera="cam01",
+            num_frames=13,
+        )
+
+
 def test_manifest_rejects_audio_metadata_mismatch(tmp_path):
     visual = tmp_path / "visual"
     audio = tmp_path / "audio"

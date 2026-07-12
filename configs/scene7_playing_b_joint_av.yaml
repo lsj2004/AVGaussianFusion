@@ -1,0 +1,26 @@
+route: B_joint_av
+scene: Scene7playing
+
+paths:
+  visual_root: /mnt/sda/lisujing/Dataset/Sampled_data/v5_0630_dynerf/Scene7playing
+  audio_root: /mnt/sda/lisujing/Dataset/Sampled_data/v5_0630_audiogs_audio/Scene7playing
+  route_a_run_dir: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene7_playing_a
+  output_dir: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene7_playing_b_joint_av
+  manifest: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene7_playing_a/scene_manifest.json
+  ftgspp_checkpoint: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene7_playing_a/ftgspp/Scene7playing/00/gaussians.pt
+  ftgspp_memmap: /mnt/sda/lisujing/Dataset/FreeTimeGSPlusPlus/_memmap/avgaussianfusion_scene7_playing_a/Scene7playing
+  output_checkpoint: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene7_playing_b_joint_av/joint_finetune.pt
+
+train:
+  warmup_steps: 1000
+  joint_steps: 1000
+  top_k: 8192
+  audio_lr: 0.0005
+  shared_lr: 0.00001
+  visual_scale: 0.125
+  audio_window_seconds: 0.5
+
+losses:
+  visual_weight: 1.0
+  audio_weight: 1.0
+  geometry_reg_weight: 0.001

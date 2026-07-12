@@ -1,0 +1,31 @@
+scene:
+  id: Scene7playing
+
+paths:
+  visual_root: /mnt/sda/lisujing/Dataset/Sampled_data/v5_0630_dynerf/Scene7playing
+  audio_root: /mnt/sda/lisujing/Dataset/Sampled_data/v5_0630_audiogs_audio/Scene7playing
+  work_dir: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene7_playing_a
+  manifest: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene7_playing_a/scene_manifest.json
+  carrier: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene7_playing_a/carrier.pt
+
+split:
+  heldout_camera: cam10
+
+audio:
+  source: near.wav
+  sample_rate: 16000
+  channels: 2
+  crop_seconds: 3.0
+  enable_phase_modeling: false
+
+visual:
+  fps: 30.0
+  num_frames: 150
+
+adapter:
+  top_k: 8192
+
+train:
+  seed: 42
+  max_steps: 1000
+  lr: 0.0005

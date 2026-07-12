@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import soundfile as sf
 import torch
 
@@ -76,6 +77,8 @@ def compute_lre(pred: torch.Tensor, target: torch.Tensor) -> float:
 
 def compute_dpam(pred: torch.Tensor, target: torch.Tensor, sample_rate: int) -> float:
     pred, target = _validate_stereo_pair(pred, target)
+    if not hasattr(np, "float"):
+        np.float = float  # type: ignore[attr-defined]
     try:
         import cdpam
     except Exception as error:  # pragma: no cover - exact missing dependency varies by env
@@ -89,7 +92,17 @@ def compute_dpam(pred: torch.Tensor, target: torch.Tensor, sample_rate: int) -> 
         sf.write(target_path, target.T.numpy(), sample_rate)
         wav_ref = cdpam.load_audio(str(target_path))
         wav_out = cdpam.load_audio(str(pred_path))
-        loss_fn = cdpam.CDPAM()
+        original_torch_load = torch.load
+
+        def _torch_load_cdpam_compat(*args: Any, **kwargs: Any) -> Any:
+            kwargs.setdefault("weights_only", False)
+            return original_torch_load(*args, **kwargs)
+
+        torch.load = _torch_load_cdpam_compat
+        try:
+            loss_fn = cdpam.CDPAM()
+        finally:
+            torch.load = original_torch_load
         value = loss_fn.forward(wav_ref, wav_out).detach().cpu().numpy()[0]
         return float(value)
 

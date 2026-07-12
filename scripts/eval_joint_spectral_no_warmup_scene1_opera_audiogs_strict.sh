@@ -4,8 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd)"
 FTGSPP_ROOT="/mnt/sda/lisujing/Dataset/FreeTimeGSPlusPlus"
-RUN_DIR="${ROOT}/runs/scene7_playing_300_b_joint_av_spectral_no_warmup"
-MANIFEST="${ROOT}/runs/scene7_playing_300_a/scene_manifest.json"
+RUN_DIR="${ROOT}/runs/scene1_opera_b_joint_av_spectral_no_warmup_audiogs_strict"
+MANIFEST="${ROOT}/runs/scene1_opera_a/scene_manifest.json"
 CHECKPOINT="${RUN_DIR}/joint_finetune.pt"
 EVAL_DIR="${RUN_DIR}/eval"
 
@@ -13,8 +13,8 @@ cd "${FTGSPP_ROOT}"
 mkdir -p "${EVAL_DIR}"
 
 if [[ ! -f "${CHECKPOINT}" ]]; then
-  echo "missing spectral Route B checkpoint: ${CHECKPOINT}" >&2
-  echo "run scripts/train_joint_spectral_no_warmup_scene7_playing_300.sh first" >&2
+  echo "missing strict AudioGS checkpoint: ${CHECKPOINT}" >&2
+  echo "run scripts/train_joint_spectral_no_warmup_scene1_opera_audiogs_strict.sh first" >&2
   exit 1
 fi
 

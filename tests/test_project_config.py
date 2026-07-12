@@ -108,3 +108,45 @@ def test_readme_labels_route_b_eval_as_metric_entrypoint():
     assert "scripts/eval_joint_scene1_opera.sh" in readme
     assert "scripts/train_joint_no_warmup_scene1_opera.sh" in readme
     assert "AudioGS-style heldout audio metrics" in readme
+
+
+def test_fair_comparison_configs_target_separate_outputs():
+    expected = {
+        "scene1_opera_b_joint_av_fair.yaml": (
+            "scene1_opera_b_joint_av_fair",
+            1000,
+        ),
+        "scene1_opera_b_joint_av_no_warmup_fair.yaml": (
+            "scene1_opera_b_joint_av_no_warmup_fair",
+            0,
+        ),
+        "scene7_playing_300_b_joint_av_fair.yaml": (
+            "scene7_playing_300_b_joint_av_fair",
+            1000,
+        ),
+        "scene7_playing_300_b_joint_av_no_warmup_fair.yaml": (
+            "scene7_playing_300_b_joint_av_no_warmup_fair",
+            0,
+        ),
+    }
+    for filename, (run_name, warmup_steps) in expected.items():
+        cfg = yaml.safe_load((Path("configs") / filename).read_text())
+        assert cfg["paths"]["output_dir"].endswith(f"/runs/{run_name}")
+        assert cfg["paths"]["output_checkpoint"].endswith(f"/runs/{run_name}/joint_finetune.pt")
+        assert cfg["train"]["warmup_steps"] == warmup_steps
+        assert cfg["train"]["joint_steps"] == 1000
+        assert cfg["train"]["audio_window_seconds"] == 0.5
+
+
+def test_fair_comparison_runner_documents_protocol_and_outputs():
+    script = Path("scripts/run_fair_baseline_comparison.sh").read_text()
+
+    assert "fair_baseline_comparison" in script
+    assert "--print-valid-joint-steps" in script
+    assert "--joint-steps" in script
+    assert "scene1_opera_b_joint_av_fair.yaml" in script
+    assert "scene7_playing_300_b_joint_av_no_warmup_fair.yaml" in script
+    assert "runs/fair_baseline_comparison" in script
+    assert "/metrics/comparison.md" in script
+    assert "strict_audiogs_cam10_allcams_summary.json" in script
+

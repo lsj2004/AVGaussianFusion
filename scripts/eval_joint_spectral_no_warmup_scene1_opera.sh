@@ -20,14 +20,15 @@ fi
 
 PYTHONPATH="${ROOT}:${FTGSPP_ROOT}:${PYTHONPATH:-}" \
 UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/avgaussianfusion-uv-cache}" \
-uv run --no-sync --with pyyaml --with soundfile python -m avfusion.eval.eval_joint_audio \
+uv run --no-sync --with pyyaml --with soundfile --with scipy python -m avfusion.eval.eval_joint_audio \
   --manifest "${MANIFEST}" \
   --checkpoint "${CHECKPOINT}" \
-  --output-dir "${EVAL_DIR}"
+  --output-dir "${EVAL_DIR}" \
+  --include-dpam
 
 PYTHONPATH="${ROOT}:${FTGSPP_ROOT}:${PYTHONPATH:-}" \
 UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/avgaussianfusion-uv-cache}" \
-uv run --no-sync --with pyyaml --with soundfile python -m avfusion.eval.eval_joint_visual \
+uv run --no-sync --with pyyaml --with soundfile --with scipy python -m avfusion.eval.eval_joint_visual \
   --manifest "${MANIFEST}" \
   --checkpoint "${CHECKPOINT}" \
   --output-dir "${EVAL_DIR}"

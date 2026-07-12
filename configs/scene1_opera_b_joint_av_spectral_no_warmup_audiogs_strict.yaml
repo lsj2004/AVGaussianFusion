@@ -1,15 +1,15 @@
-route: B_joint_av_spectral_no_warmup
+route: B_joint_av_spectral_no_warmup_audiogs_strict
 scene: scene1_opera
 
 paths:
   visual_root: /mnt/sda/lisujing/Dataset/Sampled_data/v5_0630_dynerf/scene1_opera
   audio_root: /mnt/sda/lisujing/Dataset/Sampled_data/v5_0630_audiogs_audio/scene1_opera
   route_a_run_dir: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene1_opera_a
-  output_dir: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene1_opera_b_joint_av_spectral_no_warmup
+  output_dir: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene1_opera_b_joint_av_spectral_no_warmup_audiogs_strict
   manifest: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene1_opera_a/scene_manifest.json
   ftgspp_checkpoint: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene1_opera_a/ftgspp/scene1_opera/00/gaussians.pt
   ftgspp_memmap: /mnt/sda/lisujing/Dataset/FreeTimeGSPlusPlus/_memmap/avgaussianfusion_scene1_opera_a/scene1_opera
-  output_checkpoint: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene1_opera_b_joint_av_spectral_no_warmup/joint_finetune.pt
+  output_checkpoint: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene1_opera_b_joint_av_spectral_no_warmup_audiogs_strict/joint_finetune.pt
 
 train:
   warmup_steps: 0

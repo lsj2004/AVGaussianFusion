@@ -1,0 +1,33 @@
+extends = "/mnt/sda/lisujing/Dataset/FreeTimeGSPlusPlus/configs/dynerf/ftgs/coffee_martini.toml"
+
+[data]
+video_path = "/mnt/sda/lisujing/Dataset/Sampled_data/v5_0630_dynerf/Scene7playing"
+calibration_path = "/mnt/sda/lisujing/Dataset/Sampled_data/v5_0630_dynerf/Scene7playing/poses_bounds.npy"
+extracted_path = "_extracted/avgaussianfusion_scene7_playing_a/Scene7playing"
+memmap_path = "_memmap/avgaussianfusion_scene7_playing_a/Scene7playing"
+colmap_path = "_colmap/avgaussianfusion_scene7_playing_a/Scene7playing"
+fps = 30.0
+scale = 0.25
+frames = { "start" = 0, "stop" = 301 }
+eval_cameras = [10]
+train_cameras = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38]
+
+[init]
+points_path = "_points/avgaussianfusion_scene7_playing_a/Scene7playing"
+temporal_motion_adapted = true
+temporal_flow_path = "_flow/avgaussianfusion_scene7_playing_a/Scene7playing"
+temporal_flow_cameras = { "start" = 0, "stop" = 39 }
+temporal_covis_thresh = 0.3
+
+[train]
+iterations = 3000
+color_correction = true
+color_correction_start = 3000
+color_corrector_weight = 1e-3
+
+[train.relocation]
+stop = 2000
+
+[model]
+max_duration = 1
+marginal_gating = true

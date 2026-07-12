@@ -121,3 +121,14 @@ def test_export_script_runs_inside_ftgspp_environment():
     assert 'cd "${FTGSPP_ROOT}"' in script
     assert 'PYTHONPATH="${ROOT}:${FTGSPP_ROOT}:${PYTHONPATH:-}"' in script
     assert "uv run --no-sync python -m avfusion.visual.export_ftgspp_carrier" in script
+
+
+def test_scene7_export_scripts_use_current_carrier_module():
+    for script_path in [
+        Path("scripts/export_stage1_carrier_scene7_playing.sh"),
+        Path("scripts/export_stage1_carrier_scene7_playing_300.sh"),
+    ]:
+        script = script_path.read_text()
+
+        assert "python -m avfusion.visual.export_ftgspp_carrier" in script
+        assert "avfusion.export.export_ftgspp_carrier" not in script

@@ -61,17 +61,22 @@ def _value(data: dict[str, Any], key: str) -> Any:
     return value
 
 
-def build_comparison_rows(root: str | Path) -> list[dict[str, Any]]:
+def build_comparison_rows(
+    root: str | Path,
+    route_a_run: str = "scene1_opera_a",
+    route_b_run: str = "scene1_opera_b_joint_av",
+    route_b_no_warmup_run: str = "scene1_opera_b_joint_av_no_warmup",
+) -> list[dict[str, Any]]:
     root = Path(root)
-    route_a_audio = _load_json(root / "runs/scene1_opera_a/eval/audio_summary.json")
-    route_a_visual = _load_json(root / "runs/scene1_opera_a/ftgspp/summary.json")
-    route_b_audio = _load_json(root / "runs/scene1_opera_b_joint_av/eval/audio_summary.json")
-    route_b_visual = _load_json(root / "runs/scene1_opera_b_joint_av/eval/visual_summary.json")
+    route_a_audio = _load_json(root / f"runs/{route_a_run}/eval/audio_summary.json")
+    route_a_visual = _load_json(root / f"runs/{route_a_run}/ftgspp/summary.json")
+    route_b_audio = _load_json(root / f"runs/{route_b_run}/eval/audio_summary.json")
+    route_b_visual = _load_json(root / f"runs/{route_b_run}/eval/visual_summary.json")
     route_b_nowarm_audio = _load_json(
-        root / "runs/scene1_opera_b_joint_av_no_warmup/eval/audio_summary.json"
+        root / f"runs/{route_b_no_warmup_run}/eval/audio_summary.json"
     )
     route_b_nowarm_visual = _load_json(
-        root / "runs/scene1_opera_b_joint_av_no_warmup/eval/visual_summary.json"
+        root / f"runs/{route_b_no_warmup_run}/eval/visual_summary.json"
     )
     return [
         {
@@ -335,26 +340,46 @@ def export_visual_sequence(
 
 
 def export_artifacts(root: str | Path, output_dir: str | Path, max_video_frames: int | None) -> None:
+    export_artifacts_for_runs(
+        root=root,
+        output_dir=output_dir,
+        route_a_run="scene1_opera_a",
+        route_b_run="scene1_opera_b_joint_av",
+        route_b_no_warmup_run="scene1_opera_b_joint_av_no_warmup",
+        ftgspp_scene="scene1_opera",
+        max_video_frames=max_video_frames,
+    )
+
+
+def export_artifacts_for_runs(
+    root: str | Path,
+    output_dir: str | Path,
+    route_a_run: str,
+    route_b_run: str,
+    route_b_no_warmup_run: str,
+    ftgspp_scene: str,
+    max_video_frames: int | None,
+) -> None:
     root = Path(root)
     output_dir = Path(output_dir)
-    manifest = root / "runs/scene1_opera_a/scene_manifest.json"
+    manifest = root / f"runs/{route_a_run}/scene_manifest.json"
     specs = [
         (
             "route_a_frozen_carrier",
-            root / "runs/scene1_opera_a/stage2_audio.pt",
-            root / "runs/scene1_opera_a/ftgspp/scene1_opera/00/gaussians.pt",
+            root / f"runs/{route_a_run}/stage2_audio.pt",
+            root / f"runs/{route_a_run}/ftgspp/{ftgspp_scene}/00/gaussians.pt",
             "route_a",
         ),
         (
             "route_b_warmup_joint",
-            root / "runs/scene1_opera_b_joint_av/joint_finetune.pt",
-            root / "runs/scene1_opera_b_joint_av/joint_finetune.pt",
+            root / f"runs/{route_b_run}/joint_finetune.pt",
+            root / f"runs/{route_b_run}/joint_finetune.pt",
             "route_b",
         ),
         (
             "route_b_no_warmup_joint",
-            root / "runs/scene1_opera_b_joint_av_no_warmup/joint_finetune.pt",
-            root / "runs/scene1_opera_b_joint_av_no_warmup/joint_finetune.pt",
+            root / f"runs/{route_b_no_warmup_run}/joint_finetune.pt",
+            root / f"runs/{route_b_no_warmup_run}/joint_finetune.pt",
             "route_b",
         ),
     ]
@@ -390,6 +415,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--skip-artifacts", action="store_true")
     parser.add_argument("--max-video-frames", type=int)
+    parser.add_argument("--route-a-run", default="scene1_opera_a")
+    parser.add_argument("--route-b-run", default="scene1_opera_b_joint_av")
+    parser.add_argument("--route-b-no-warmup-run", default="scene1_opera_b_joint_av_no_warmup")
+    parser.add_argument("--ftgspp-scene", default="scene1_opera")
     return parser
 
 
@@ -397,10 +426,23 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = build_arg_parser().parse_args(argv)
     root = Path(args.root)
     output_dir = Path(args.output_dir) if args.output_dir else root / "runs/scene1_opera_comparison"
-    rows = build_comparison_rows(root)
+    rows = build_comparison_rows(
+        root,
+        route_a_run=args.route_a_run,
+        route_b_run=args.route_b_run,
+        route_b_no_warmup_run=args.route_b_no_warmup_run,
+    )
     write_comparison_tables(rows, output_dir / "metrics")
     if not args.skip_artifacts:
-        export_artifacts(root, output_dir, max_video_frames=args.max_video_frames)
+        export_artifacts_for_runs(
+            root=root,
+            output_dir=output_dir,
+            route_a_run=args.route_a_run,
+            route_b_run=args.route_b_run,
+            route_b_no_warmup_run=args.route_b_no_warmup_run,
+            ftgspp_scene=args.ftgspp_scene,
+            max_video_frames=args.max_video_frames,
+        )
     print(json.dumps({"output_dir": str(output_dir), "rows": rows}, indent=2, sort_keys=True))
 
 

@@ -4,10 +4,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd)"
 FTGSPP_ROOT="/mnt/sda/lisujing/Dataset/FreeTimeGSPlusPlus"
-CONFIG="${ROOT}/configs/scene1_opera_b_joint_av_spectral_no_warmup.yaml"
-RUN_DIR="${ROOT}/runs/scene1_opera_b_joint_av_spectral_no_warmup"
-MANIFEST="${ROOT}/runs/scene1_opera_a/scene_manifest.json"
-FTGSPP_CHECKPOINT="${ROOT}/runs/scene1_opera_a/ftgspp/scene1_opera/00/gaussians.pt"
+CONFIG="${ROOT}/configs/scene7_playing_300_b_joint_av_spectral_no_warmup_audiogs_strict.yaml"
+RUN_DIR="${ROOT}/runs/scene7_playing_300_b_joint_av_spectral_no_warmup_audiogs_strict"
+MANIFEST="${ROOT}/runs/scene7_playing_300_a/scene_manifest.json"
+FTGSPP_CHECKPOINT="${ROOT}/runs/scene7_playing_300_a/ftgspp/Scene7playing/00/gaussians.pt"
 
 mkdir -p "${RUN_DIR}"
 
@@ -22,7 +22,7 @@ valid_joint_steps() {
 }
 
 if [[ ! -f "${CONFIG}" ]]; then
-  echo "missing spectral Route B config: ${CONFIG}" >&2
+  echo "missing strict AudioGS config: ${CONFIG}" >&2
   exit 1
 fi
 
@@ -37,7 +37,7 @@ if [[ ! -f "${FTGSPP_CHECKPOINT}" ]]; then
 fi
 
 JOINT_STEPS="$(valid_joint_steps)"
-echo "spectral Route B scene1_opera joint_steps=${JOINT_STEPS}"
+echo "strict AudioGS spectral Route B scene7_playing_300 joint_steps=${JOINT_STEPS}"
 
 cd "${FTGSPP_ROOT}"
 PYTHONPATH="${ROOT}:${FTGSPP_ROOT}:${PYTHONPATH:-}" \

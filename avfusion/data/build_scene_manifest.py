@@ -52,6 +52,29 @@ def _resolve_audio_value(
     return discovered
 
 
+def _resolve_num_frames(
+    requested: int | None,
+    discovered: object,
+) -> int:
+    if discovered is None:
+        if requested is None:
+            raise ValueError(
+                "num_frames must be provided when visual manifest metadata is absent"
+            )
+        return int(requested)
+
+    discovered_int = int(discovered)
+    if requested is None:
+        return discovered_int
+    requested_int = int(requested)
+    if requested_int > discovered_int:
+        raise ValueError(
+            "num_frames exceeds visual manifest: "
+            f"requested={requested_int!r}, visual_manifest={discovered_int!r}"
+        )
+    return requested_int
+
+
 def _audio_info(path: Path) -> tuple[int, int]:
     info = sf.info(path)
     return int(info.samplerate), int(info.channels)
@@ -103,11 +126,7 @@ def build_manifest(
             )
 
     fps = float(_resolve_metadata_value("fps", fps, visual_metadata.get("fps")))
-    num_frames = int(
-        _resolve_metadata_value(
-            "num_frames", num_frames, visual_metadata.get("num_frames")
-        )
-    )
+    num_frames = _resolve_num_frames(num_frames, visual_metadata.get("num_frames"))
     manifest_camera_names = visual_metadata.get("camera_names")
     if manifest_camera_names is not None and list(manifest_camera_names) != video_names:
         raise ValueError("camera_names in visual manifest do not match cam*.mp4 files")
@@ -156,6 +175,11 @@ def main() -> None:
     parser.add_argument("--visual-root", required=True)
     parser.add_argument("--audio-root", required=True)
     parser.add_argument("--heldout-camera", default="cam10")
+    parser.add_argument("--fps", type=float)
+    parser.add_argument("--num-frames", type=int)
+    parser.add_argument("--sample-rate", type=int)
+    parser.add_argument("--channels", type=int)
+    parser.add_argument("--crop-seconds", type=float, default=3.0)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     build_manifest(
@@ -163,6 +187,11 @@ def main() -> None:
         visual_root=args.visual_root,
         audio_root=args.audio_root,
         heldout_camera=args.heldout_camera,
+        fps=args.fps,
+        num_frames=args.num_frames,
+        sample_rate=args.sample_rate,
+        channels=args.channels,
+        crop_seconds=args.crop_seconds,
         output_path=args.output,
     )
 
