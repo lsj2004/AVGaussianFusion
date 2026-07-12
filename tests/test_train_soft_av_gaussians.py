@@ -80,6 +80,29 @@ def test_soft_config_reads_tf_diff_ratio_loss_controls(tmp_path):
     assert cfg.audio_tf_diff_ratio_margin_db == 1.0
 
 
+def test_soft_config_reads_diff_response_regularization_controls(tmp_path):
+    config_path = tmp_path / "route_c.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "paths:",
+                "  manifest: /data/scene_manifest.json",
+                "  ftgspp_checkpoint: /data/gaussians.pt",
+                "  output_checkpoint: /out/soft.pt",
+                "losses:",
+                "  diff_response_l2_weight: 0.001",
+                "  diff_response_smooth_weight: 0.01",
+            ]
+        )
+        + "\n"
+    )
+
+    cfg = resolve_soft_training_config(build_arg_parser().parse_args(["--config", str(config_path)]))
+
+    assert cfg.diff_response_l2_weight == 0.001
+    assert cfg.diff_response_smooth_weight == 0.01
+
+
 def test_soft_config_rejects_long_default_route_c_window(tmp_path):
     config_path = tmp_path / "route_c.yaml"
     config_path.write_text(
@@ -149,6 +172,58 @@ def test_compute_total_soft_loss_applies_coupling_weights_and_backpropagates():
     assert losses["total"] > audio_loss.detach()
     assert losses["coupling_scale"] == 1.0
     assert field.means.grad is not None
+
+
+def test_compute_total_soft_loss_regularizes_diff_response_frequency_structure():
+    visual_state = _state(5)
+    field = AcousticGaussianField.from_visual_state(visual_state, num_points=6, num_frequency_bins=8)
+    with torch.no_grad():
+        field.diff_response[:, ::2] = 1.0
+        field.diff_response[:, 1::2] = -1.0
+    acoustic_state = field.query(torch.tensor([[0.0]]))
+    audio_loss = acoustic_state["xyz"].mean() * 0.0
+    rgb_loss = acoustic_state["opacity"].mean() * 0.0
+    cfg = SoftTrainingConfig(
+        manifest="manifest.json",
+        ftgspp_checkpoint="gaussians.pt",
+        output="soft.pt",
+        acoustic_steps=1,
+        joint_steps=1,
+        num_acoustic_points=6,
+        top_k=4,
+        audio_lr=1e-3,
+        acoustic_lr=1e-3,
+        shared_lr=0.0,
+        audio_window_seconds=0.5,
+        audio_crop_mode="center",
+        anchored_fraction=0.6,
+        dynamic_fraction=0.2,
+        anchor_weight=0.0,
+        motion_weight=0.0,
+        activity_weight=0.0,
+        sparse_weight=0.0,
+        rgb_weight=0.0,
+        audio_weight=1.0,
+        visual_guard_psnr_drop_db=0.3,
+        audio_guard_relative_drop=0.05,
+        diff_response_l2_weight=0.01,
+        diff_response_smooth_weight=0.02,
+    )
+
+    losses = compute_total_soft_loss(
+        cfg,
+        field,
+        acoustic_state,
+        visual_state,
+        audio_loss=audio_loss,
+        rgb_loss=rgb_loss,
+    )
+    losses["total"].backward()
+
+    assert losses["diff_response_l2"] > 0
+    assert losses["diff_response_smooth"] > 0
+    assert field.diff_response.grad is not None
+    assert field.diff_response.grad.abs().sum() > 0
 
 
 def test_coupling_schedule_preserves_audio_warmup_before_joint_stage():

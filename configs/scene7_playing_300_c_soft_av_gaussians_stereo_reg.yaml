@@ -1,0 +1,50 @@
+route: C_soft_av_gaussians
+scene: scene7_playing_300
+
+paths:
+  visual_root: /mnt/sda/lisujing/Dataset/Sampled_data/v5_0630_dynerf/Scene7playing
+  audio_root: /mnt/sda/lisujing/Dataset/Sampled_data/v5_0630_audiogs_audio/scene7_playing_300
+  route_a_run_dir: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene7_playing_300_a
+  output_dir: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene7_playing_300_c_soft_av_gaussians_stereo_reg
+  manifest: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene7_playing_300_a/scene_manifest.json
+  ftgspp_checkpoint: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene7_playing_300_a/ftgspp/Scene7playing/00/gaussians.pt
+  ftgspp_memmap: /mnt/sda/lisujing/Dataset/FreeTimeGSPlusPlus/_memmap/avgaussianfusion_scene7_playing_a/Scene7playing
+  output_checkpoint: /mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/scene7_playing_300_c_soft_av_gaussians_stereo_reg/soft_av.pt
+
+train:
+  acoustic_steps: 3000
+  joint_steps: 1000
+  num_acoustic_points: 8192
+  top_k: 8192
+  audio_lr: 0.0005
+  acoustic_lr: 0.0005
+  shared_lr: 0.0
+  visual_scale: 0.125
+  audio_window_seconds: 0.5
+  audio_crop_mode: center
+  anchored_fraction: 0.6
+  dynamic_fraction: 0.2
+  audio_loss_type: audiogs_mono_diff
+
+losses:
+  audio_weight: 1.0
+  visual_weight: 0.0
+  anchor_weight: 0.001
+  motion_weight: 0.001
+  activity_weight: 0.0001
+  sparse_weight: 0.00001
+  audio_diff_weight: 0.5
+  audio_lre_loss_weight: 0.3
+  audio_tf_diff_ratio_loss_weight: 0.1
+  audio_tf_diff_ratio_margin_db: 1.0
+  diff_response_l2_weight: 0.0001
+  diff_response_smooth_weight: 0.001
+  audio_bandpass:
+    enable: true
+    low_hz: 150.0
+    high_hz: -1.0
+    order: 5
+
+guards:
+  visual_psnr_drop_db: 0.3
+  audio_relative_drop: 0.05

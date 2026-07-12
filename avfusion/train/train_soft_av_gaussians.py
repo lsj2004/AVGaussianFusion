@@ -49,6 +49,8 @@ class SoftTrainingConfig:
     audio_lre_loss_weight: float = 0.075
     audio_tf_diff_ratio_loss_weight: float = 0.0
     audio_tf_diff_ratio_margin_db: float = 1.0
+    diff_response_l2_weight: float = 0.0
+    diff_response_smooth_weight: float = 0.0
     audio_bandpass: dict[str, float | bool] | None = None
     config: str | None = None
 
@@ -156,6 +158,8 @@ def resolve_soft_training_config(args: argparse.Namespace) -> SoftTrainingConfig
         audio_lre_loss_weight=float(losses.get("audio_lre_loss_weight", 0.075)),
         audio_tf_diff_ratio_loss_weight=float(losses.get("audio_tf_diff_ratio_loss_weight", 0.0)),
         audio_tf_diff_ratio_margin_db=float(losses.get("audio_tf_diff_ratio_margin_db", 1.0)),
+        diff_response_l2_weight=float(losses.get("diff_response_l2_weight", 0.0)),
+        diff_response_smooth_weight=float(losses.get("diff_response_smooth_weight", 0.0)),
         audio_bandpass=dict(audio_bandpass) if isinstance(audio_bandpass, dict) else None,
         config=args.config,
     )
@@ -196,6 +200,12 @@ def compute_total_soft_loss(
 ) -> dict[str, torch.Tensor]:
     coupling = soft_coupling_losses(acoustic_field, acoustic_state, visual_state)
     coupling_scale = float(coupling_scale)
+    diff_response = acoustic_state["diff_response"]
+    diff_response_l2 = diff_response.square().mean()
+    if diff_response.shape[-1] > 1:
+        diff_response_smooth = (diff_response[..., 1:] - diff_response[..., :-1]).square().mean()
+    else:
+        diff_response_smooth = diff_response.new_zeros(())
     total = (
         cfg.audio_weight * audio_loss
         + cfg.rgb_weight * rgb_loss
@@ -203,6 +213,8 @@ def compute_total_soft_loss(
         + coupling_scale * cfg.motion_weight * coupling["motion"]
         + coupling_scale * cfg.activity_weight * coupling["activity"]
         + cfg.sparse_weight * coupling["sparse"]
+        + cfg.diff_response_l2_weight * diff_response_l2
+        + cfg.diff_response_smooth_weight * diff_response_smooth
     )
     return {
         "total": total,
@@ -212,6 +224,8 @@ def compute_total_soft_loss(
         "motion": coupling["motion"].detach(),
         "activity": coupling["activity"].detach(),
         "sparse": coupling["sparse"].detach(),
+        "diff_response_l2": diff_response_l2.detach(),
+        "diff_response_smooth": diff_response_smooth.detach(),
         "coupling_scale": audio_loss.new_tensor(coupling_scale),
     }
 

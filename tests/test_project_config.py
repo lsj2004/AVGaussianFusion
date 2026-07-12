@@ -150,3 +150,29 @@ def test_fair_comparison_runner_documents_protocol_and_outputs():
     assert "/metrics/comparison.md" in script
     assert "strict_audiogs_cam10_allcams_summary.json" in script
 
+
+
+def test_route_c_stereo_regularization_configs_use_separate_outputs_and_stronger_stereo_losses():
+    expected = {
+        "scene1_opera_c_soft_av_gaussians_stereo_reg.yaml": "scene1_opera_c_soft_av_gaussians_stereo_reg",
+        "scene7_playing_300_c_soft_av_gaussians_stereo_reg.yaml": "scene7_playing_300_c_soft_av_gaussians_stereo_reg",
+    }
+    for filename, run_name in expected.items():
+        cfg = yaml.safe_load((Path("configs") / filename).read_text())
+        assert cfg["route"] == "C_soft_av_gaussians"
+        assert cfg["paths"]["output_dir"].endswith(f"/runs/{run_name}")
+        assert cfg["paths"]["output_checkpoint"].endswith(f"/runs/{run_name}/soft_av.pt")
+        assert cfg["losses"]["audio_lre_loss_weight"] == 0.3
+        assert cfg["losses"]["audio_tf_diff_ratio_loss_weight"] == 0.1
+        assert cfg["losses"]["diff_response_l2_weight"] == 0.0001
+        assert cfg["losses"]["diff_response_smooth_weight"] == 0.001
+
+
+def test_route_c_stereo_regularization_scripts_point_to_ablation_configs():
+    scene1_script = Path("scripts/train_soft_av_scene1_opera_stereo_reg.sh").read_text()
+    scene7_script = Path("scripts/train_soft_av_scene7_playing_300_stereo_reg.sh").read_text()
+
+    assert "scene1_opera_c_soft_av_gaussians_stereo_reg.yaml" in scene1_script
+    assert "scene7_playing_300_c_soft_av_gaussians_stereo_reg.yaml" in scene7_script
+    assert "python -m avfusion.train.train_soft_av_gaussians" in scene1_script
+    assert "python -m avfusion.train.train_soft_av_gaussians" in scene7_script
