@@ -176,3 +176,19 @@ def test_route_c_stereo_regularization_scripts_point_to_ablation_configs():
     assert "scene7_playing_300_c_soft_av_gaussians_stereo_reg.yaml" in scene7_script
     assert "python -m avfusion.train.train_soft_av_gaussians" in scene1_script
     assert "python -m avfusion.train.train_soft_av_gaussians" in scene7_script
+
+
+def test_route_c_fulltrack_eval_scripts_write_global_audio_outputs():
+    scripts = [
+        "scripts/eval_soft_av_fulltrack_scene1_opera.sh",
+        "scripts/eval_soft_av_fulltrack_scene7_playing_300.sh",
+        "scripts/eval_soft_av_fulltrack_scene1_opera_stereo_reg.sh",
+        "scripts/eval_soft_av_fulltrack_scene7_playing_300_stereo_reg.sh",
+    ]
+    for script_path in scripts:
+        script = Path(script_path).read_text()
+        assert "python -m avfusion.eval.eval_soft_audio_fulltrack" in script
+        assert "eval_fulltrack_audiogs_3s_nonoverlap" in script
+        assert "eval_fulltrack_visual_center_0p5s_ola" in script
+        assert "--protocol audiogs_3s_nonoverlap_fulltrack" in script
+        assert "--protocol visual_center_overlap_add_fulltrack" in script
