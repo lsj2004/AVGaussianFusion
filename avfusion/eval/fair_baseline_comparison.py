@@ -23,6 +23,7 @@ FAIR_COLUMNS = [
     "source",
     "steps_or_clips",
     "audio_eval_protocol",
+    "metric_scope",
     "dpam_protocol",
     "visual_eval_frames",
     "MAG",
@@ -46,9 +47,11 @@ DEFAULT_DATASETS = [
         "route_b_spectral_no_warmup_run": "scene1_opera_b_joint_av_spectral_no_warmup",
         "route_b_spectral_strict_audiogs_run": "scene1_opera_b_joint_av_spectral_no_warmup_audiogs_strict",
         "route_c_run": "scene1_opera_c_soft_av_gaussians",
+        "route_c_stereo_reg_run": "scene1_opera_c_soft_av_gaussians_stereo_reg",
         "ftgspp_scene": "scene1_opera",
         "ftgspp_config": "configs/ftgspp_scene1_opera/scene1_opera.toml",
         "strict_audiogs_summary": "/mnt/sda/lisujing/Dataset/audioGS-replay/runs/strict_audiogs_cam10_allcams/strict_audiogs_cam10_allcams_summary.json",
+        "strict_audiogs_fulltrack_summary": "/mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/fair_baseline_comparison/audiogs_fulltrack_baseline/scene1_opera/full_audio_summary.json",
         "strict_audiogs_artifact": "/mnt/sda/lisujing/Dataset/audioGS-replay/runs/strict_audiogs_cam10_allcams/eval/SC-scene1-opera-cam10-allcams/viewpoint_11",
     },
     {
@@ -59,9 +62,11 @@ DEFAULT_DATASETS = [
         "route_b_spectral_no_warmup_run": "scene7_playing_300_b_joint_av_spectral_no_warmup",
         "route_b_spectral_strict_audiogs_run": "scene7_playing_300_b_joint_av_spectral_no_warmup_audiogs_strict",
         "route_c_run": "scene7_playing_300_c_soft_av_gaussians",
+        "route_c_stereo_reg_run": "scene7_playing_300_c_soft_av_gaussians_stereo_reg",
         "ftgspp_scene": "Scene7playing",
         "ftgspp_config": "configs/ftgspp_scene7_playing_300/Scene7playing.toml",
         "strict_audiogs_summary": "/mnt/sda/lisujing/Dataset/audioGS-replay/runs/strict_audiogs_cam10_allcams/strict_audiogs_cam10_allcams_summary.json",
+        "strict_audiogs_fulltrack_summary": "/mnt/sda/lisujing/Dataset/AVGaussianFusion/runs/fair_baseline_comparison/audiogs_fulltrack_baseline/scene7_playing_300/full_audio_summary.json",
         "strict_audiogs_artifact": "/mnt/sda/lisujing/Dataset/audioGS-replay/runs/strict_audiogs_cam10_allcams/eval/SC-scene7-playing-300-cam10-allcams/viewpoint_11",
     },
 ]
@@ -245,6 +250,59 @@ def _audio_window_protocol(audio_summary: dict[str, Any]) -> str:
     return "AVFusion timed visual-frame audio window average"
 
 
+def _fulltrack_audio_protocol(audio_summary: dict[str, Any]) -> str:
+    protocol = audio_summary.get("protocol")
+    if protocol == "source_to_heldout_fulltrack":
+        return "AVFusion full-track source-to-heldout audio"
+    if protocol == "audiogs_3s_nonoverlap_fulltrack":
+        return "AVFusion full-track AudioGS-style 3s non-overlap"
+    if protocol == "visual_center_overlap_add_fulltrack":
+        return "AVFusion full-track visual-center 0.5s overlap-add"
+    return _audio_window_protocol(audio_summary)
+
+
+def _route_c_fulltrack_rows(
+    base: dict[str, Any],
+    root: Path,
+    run_name: str,
+    method_prefix: str,
+    train_summary: dict[str, Any],
+    visual_summary: dict[str, Any],
+    protocol: dict[str, Any],
+) -> list[dict[str, Any]]:
+    run_dir = root / "runs" / run_name
+    summaries = [
+        run_dir / "eval_fulltrack_audiogs_3s_nonoverlap" / "full_audio_summary.json",
+        run_dir / "eval_fulltrack_visual_center_0p5s_ola" / "full_audio_summary.json",
+    ]
+    rows = []
+    for summary_path in summaries:
+        audio_summary = _run_summary(summary_path)
+        if not audio_summary:
+            continue
+        rows.append(
+            {
+                **base,
+                "method": f"{method_prefix} ({_fulltrack_audio_protocol(audio_summary)})",
+                "steps_or_clips": train_summary.get("training_steps") or train_summary.get("joint_steps"),
+                "audio_eval_protocol": _fulltrack_audio_protocol(audio_summary),
+                "metric_scope": "full_track",
+                "dpam_protocol": _joint_dpam_protocol(audio_summary),
+                "visual_eval_frames": visual_summary.get("num_frames") or protocol["num_frames"],
+                "MAG": audio_summary.get("MAG"),
+                "ENV": audio_summary.get("ENV"),
+                "LRE": audio_summary.get("LRE"),
+                "DPAM": audio_summary.get("DPAM"),
+                "RTE": audio_summary.get("RTE"),
+                "PSNR": _metric_value(visual_summary, "PSNR_mean", "PSNR"),
+                "MSE": _metric_value(visual_summary, "MSE_mean", "MSE"),
+                "L1": _metric_value(visual_summary, "L1_mean", "L1"),
+                "artifact": _artifact(run_dir),
+            }
+        )
+    return rows
+
+
 def build_fair_comparison_rows(
     root: str | Path,
     datasets: Sequence[dict[str, Any]] | None = None,
@@ -270,12 +328,22 @@ def build_fair_comparison_rows(
         )
         route_c_run = spec.get("route_c_run")
         route_c_run = str(route_c_run) if route_c_run is not None else None
+        route_c_stereo_reg_run = spec.get("route_c_stereo_reg_run")
+        route_c_stereo_reg_run = (
+            str(route_c_stereo_reg_run) if route_c_stereo_reg_run is not None else None
+        )
         protocol = _manifest_protocol(root, route_a_run)
         route_a_audio = _run_summary(root / "runs" / route_a_run / "eval_avcloud" / "audio_summary.json")
         if not route_a_audio:
             route_a_audio = _run_summary(root / "runs" / route_a_run / "eval" / "audio_summary.json")
+        route_a_fulltrack_audio = _run_summary(
+            root / "runs" / route_a_run / "eval_fulltrack" / "full_audio_summary.json"
+        )
+        if route_a_fulltrack_audio:
+            route_a_audio = route_a_fulltrack_audio
         route_a_visual = _run_summary(root / "runs" / route_a_run / "ftgspp" / "summary.json")
         strict = _strict_audiogs_row(_load_json(spec.get("strict_audiogs_summary")), dataset)
+        strict_fulltrack = _run_summary(spec.get("strict_audiogs_fulltrack_summary"))
         route_b_audio = _run_summary(root / "runs" / route_b_run / "eval" / "audio_summary.json")
         route_b_visual = _run_summary(root / "runs" / route_b_run / "eval" / "visual_summary.json")
         route_b_train = _run_summary(root / "runs" / route_b_run / "train_summary.json")
@@ -312,12 +380,15 @@ def build_fair_comparison_rows(
             spectral_strict_train = _run_summary(
                 root / "runs" / route_b_spectral_strict_audiogs_run / "train_summary.json"
             )
-        route_c_audio = {}
         route_c_visual = route_a_visual
         route_c_train = {}
         if route_c_run is not None:
-            route_c_audio = _run_summary(root / "runs" / route_c_run / "eval" / "audio_summary.json")
             route_c_train = _run_summary(root / "runs" / route_c_run / "train_summary.json")
+        route_c_stereo_reg_train = {}
+        if route_c_stereo_reg_run is not None:
+            route_c_stereo_reg_train = _run_summary(
+                root / "runs" / route_c_stereo_reg_run / "train_summary.json"
+            )
 
         base = {
             "dataset": dataset,
@@ -332,6 +403,7 @@ def build_fair_comparison_rows(
                     "method": "Separate AudioGS baseline (source code)",
                     "steps_or_clips": strict.get("num_frames"),
                     "audio_eval_protocol": "AudioGS source-code 3s non-overlap clip eval",
+                    "metric_scope": "clip_average",
                     "dpam_protocol": "AudioGS source eval",
                     "visual_eval_frames": None,
                     "MAG": strict.get("MAG"),
@@ -344,11 +416,37 @@ def build_fair_comparison_rows(
                     "L1": None,
                     "artifact": _artifact(spec.get("strict_audiogs_artifact", "")),
                 },
+            ]
+        )
+        if strict_fulltrack:
+            rows.append(
+                {
+                    **base,
+                    "method": "Separate AudioGS baseline (source code full-track)",
+                    "steps_or_clips": strict_fulltrack.get("num_windows"),
+                    "audio_eval_protocol": "AudioGS source-code 3s non-overlap full-track",
+                    "metric_scope": "full_track",
+                    "dpam_protocol": _joint_dpam_protocol(strict_fulltrack),
+                    "visual_eval_frames": None,
+                    "MAG": strict_fulltrack.get("MAG"),
+                    "ENV": strict_fulltrack.get("ENV"),
+                    "LRE": strict_fulltrack.get("LRE"),
+                    "DPAM": strict_fulltrack.get("DPAM"),
+                    "RTE": strict_fulltrack.get("RTE"),
+                    "PSNR": None,
+                    "MSE": None,
+                    "L1": None,
+                    "artifact": _artifact(spec.get("strict_audiogs_artifact", "")),
+                }
+            )
+        rows.extend(
+            [
                 {
                     **base,
                     "method": "Separate FreeTimeGS++ baseline (visual only)",
                     "steps_or_clips": None,
                     "audio_eval_protocol": None,
+                    "metric_scope": "visual_only",
                     "dpam_protocol": None,
                     "visual_eval_frames": protocol["num_frames"],
                     "MAG": None,
@@ -365,8 +463,17 @@ def build_fair_comparison_rows(
                     **base,
                     "method": "AVFusion Route A frozen visual + audio head",
                     "steps_or_clips": 1,
-                    "audio_eval_protocol": "AVFusion AudioGS-style heldout 3s crop eval",
-                    "dpam_protocol": "AVCloud/DPAM full crop eval",
+                    "audio_eval_protocol": (
+                        _fulltrack_audio_protocol(route_a_audio)
+                        if route_a_fulltrack_audio
+                        else "AVFusion AudioGS-style heldout 3s crop eval"
+                    ),
+                    "metric_scope": "full_track" if route_a_fulltrack_audio else "clip_average",
+                    "dpam_protocol": (
+                        _joint_dpam_protocol(route_a_audio)
+                        if route_a_fulltrack_audio
+                        else "AVCloud/DPAM full crop eval"
+                    ),
                     "visual_eval_frames": protocol["num_frames"],
                     "MAG": route_a_audio.get("MAG"),
                     "ENV": route_a_audio.get("ENV"),
@@ -383,6 +490,7 @@ def build_fair_comparison_rows(
                     "method": "AVFusion joint warmup",
                     "steps_or_clips": route_b_train.get("joint_steps"),
                     "audio_eval_protocol": "AVFusion timed visual-frame audio window average",
+                    "metric_scope": "window_average",
                     "dpam_protocol": _joint_dpam_protocol(route_b_audio),
                     "visual_eval_frames": route_b_visual.get("num_frames"),
                     "MAG": route_b_audio.get("MAG"),
@@ -400,6 +508,7 @@ def build_fair_comparison_rows(
                     "method": "AVFusion joint no warmup",
                     "steps_or_clips": route_b_nowarm_train.get("joint_steps"),
                     "audio_eval_protocol": "AVFusion timed visual-frame audio window average",
+                    "metric_scope": "window_average",
                     "dpam_protocol": _joint_dpam_protocol(route_b_nowarm_audio),
                     "visual_eval_frames": route_b_nowarm_visual.get("num_frames"),
                     "MAG": route_b_nowarm_audio.get("MAG"),
@@ -423,6 +532,7 @@ def build_fair_comparison_rows(
                     "method": "AVFusion spectral audio head no warmup",
                     "steps_or_clips": spectral_train.get("joint_steps"),
                     "audio_eval_protocol": "AVFusion timed visual-frame audio window average",
+                    "metric_scope": "window_average",
                     "dpam_protocol": _joint_dpam_protocol(spectral_audio),
                     "visual_eval_frames": spectral_visual.get("num_frames"),
                     "MAG": spectral_audio.get("MAG"),
@@ -445,6 +555,7 @@ def build_fair_comparison_rows(
                     "method": "AVFusion spectral audio head no warmup + strict AudioGS audio",
                     "steps_or_clips": spectral_strict_train.get("joint_steps"),
                     "audio_eval_protocol": "AVFusion timed visual-frame audio window average",
+                    "metric_scope": "window_average",
                     "dpam_protocol": _joint_dpam_protocol(spectral_strict_audio),
                     "visual_eval_frames": spectral_strict_visual.get("num_frames"),
                     "MAG": spectral_strict_audio.get("MAG"),
@@ -459,24 +570,28 @@ def build_fair_comparison_rows(
                 }
             )
         if route_c_run is not None and (root / "runs" / route_c_run).exists():
-            rows.append(
-                {
-                    **base,
-                    "method": "AVFusion Route C soft acoustic Gaussians",
-                    "steps_or_clips": route_c_train.get("training_steps") or route_c_train.get("joint_steps"),
-                    "audio_eval_protocol": _audio_window_protocol(route_c_audio),
-                    "dpam_protocol": _joint_dpam_protocol(route_c_audio),
-                    "visual_eval_frames": route_c_visual.get("num_frames") or protocol["num_frames"],
-                    "MAG": route_c_audio.get("MAG"),
-                    "ENV": route_c_audio.get("ENV"),
-                    "LRE": route_c_audio.get("LRE"),
-                    "DPAM": route_c_audio.get("DPAM"),
-                    "RTE": route_c_audio.get("RTE"),
-                    "PSNR": _metric_value(route_c_visual, "PSNR_mean", "PSNR"),
-                    "MSE": _metric_value(route_c_visual, "MSE_mean", "MSE"),
-                    "L1": _metric_value(route_c_visual, "L1_mean", "L1"),
-                    "artifact": _artifact(root / "runs" / route_c_run),
-                }
+            rows.extend(
+                _route_c_fulltrack_rows(
+                    base,
+                    root,
+                    route_c_run,
+                    "AVFusion Route C soft acoustic Gaussians",
+                    route_c_train,
+                    route_c_visual,
+                    protocol,
+                )
+            )
+        if route_c_stereo_reg_run is not None and (root / "runs" / route_c_stereo_reg_run).exists():
+            rows.extend(
+                _route_c_fulltrack_rows(
+                    base,
+                    root,
+                    route_c_stereo_reg_run,
+                    "AVFusion Route C soft acoustic Gaussians + stereo regularization",
+                    route_c_stereo_reg_train,
+                    route_c_visual,
+                    protocol,
+                )
             )
     return rows
 
@@ -502,6 +617,7 @@ def write_fair_comparison_tables(rows: list[dict[str, Any]], output_dir: str | P
         "# Fair Baseline Comparison",
         "",
         "Lower is better for MAG/ENV/LRE/DPAM/RTE. Higher is better for PSNR.",
+        "Use metric_scope to separate non-comparable audio aggregations: full_track, window_average, clip_average, and visual_only.",
         "",
         "| " + " | ".join(FAIR_COLUMNS) + " |",
         "| " + " | ".join(["---"] * len(FAIR_COLUMNS)) + " |",

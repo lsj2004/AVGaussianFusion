@@ -1,10 +1,12 @@
 import json
 from pathlib import Path
 
+import soundfile as sf
 import pytest
 import torch
 
 from avfusion.eval.eval_audio import evaluate_audio_checkpoint, main, write_eval_summary
+from avfusion.eval.eval_audio_fulltrack import evaluate_audio_fulltrack_checkpoint
 from tests.test_audio_video_dataset import _write_manifest
 from tests.test_train_frozen_carrier_audio import _write_carrier
 
@@ -79,6 +81,40 @@ def test_evaluate_audio_checkpoint_writes_heldout_metrics(tmp_path):
     assert "l1_waveform" in summary["debug"]
     assert "stft_magnitude" in summary["debug"]
     assert (output_dir / "audio_summary.json").exists()
+
+
+def test_evaluate_audio_fulltrack_checkpoint_writes_global_metrics(tmp_path):
+    manifest = _write_manifest(tmp_path)
+    carrier_path = tmp_path / "carrier.pt"
+    checkpoint_path = tmp_path / "stage2_audio.pt"
+    output_dir = tmp_path / "eval_fulltrack"
+    _write_carrier(carrier_path)
+    torch.save(
+        {
+            "carrier_path": str(carrier_path),
+            "top_k": 2,
+            "params": {
+                "mono_gain": torch.zeros(2, 1),
+                "diff_gain": torch.zeros(2, 1),
+            },
+            "loss_history": [0.1],
+        },
+        checkpoint_path,
+    )
+
+    summary = evaluate_audio_fulltrack_checkpoint(manifest, checkpoint_path, output_dir)
+
+    assert summary["camera"] == "cam10"
+    assert summary["eval_type"] == "fulltrack"
+    assert summary["protocol"] == "source_to_heldout_fulltrack"
+    assert "MAG" in summary
+    assert "ENV" in summary
+    assert "LRE" in summary
+    assert (output_dir / "full_audio_summary.json").exists()
+    assert (output_dir / "pred_full.wav").exists()
+    pred_audio, sample_rate = sf.read(output_dir / "pred_full.wav", always_2d=True)
+    assert sample_rate == 16000
+    assert pred_audio.shape[1] == 2
 
 
 def test_eval_main_writes_summary(tmp_path):

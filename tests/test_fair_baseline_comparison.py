@@ -100,6 +100,20 @@ def test_build_fair_comparison_rows_includes_required_methods_and_protocol_colum
         {"camera": "cam10", "MAG": 0.1, "ENV": 0.2, "LRE": 0.3, "DPAM": 0.4, "RTE": 0.5},
     )
     _write_json(
+        route_a / "eval_fulltrack/full_audio_summary.json",
+        {
+            "camera": "cam10",
+            "eval_type": "fulltrack",
+            "protocol": "source_to_heldout_fulltrack",
+            "MAG": 0.11,
+            "ENV": 0.21,
+            "LRE": 0.31,
+            "DPAM": None,
+            "DPAM_available": False,
+            "RTE": None,
+        },
+    )
+    _write_json(
         route_a / "ftgspp/summary.json",
         {"PSNR_mean": {"total": 25.0}, "MSE": {"total": 0.01}, "L1": {"total": 0.02}},
     )
@@ -130,27 +144,55 @@ def test_build_fair_comparison_rows_includes_required_methods_and_protocol_colum
             root / f"runs/{run_name}/train_summary.json",
             {"joint_steps": 228, "warmup_steps": 1000 if "no_warmup" not in run_name else 0},
         )
-    _write_json(
-        root / "runs/scene1_opera_c_soft_av_gaussians/eval/audio_summary.json",
-        {
-            "route": "C_soft_av_gaussians",
-            "renderer_type": "frequency_transfer",
-            "camera": "cam10",
-            "MAG": 0.31,
-            "ENV": 0.41,
-            "LRE": 0.51,
-            "DPAM": 0.61,
-            "DPAM_available": True,
-            "dpam_num_windows": 8,
-            "RTE": None,
-            "num_windows": 10,
-            "requested_windows": 10,
-            "audio_window_seconds": 0.5,
-            "audio_eval_protocol": "visual_center_skip_padding",
-        },
-    )
+    for out_dir, protocol, mag in [
+        ("eval_fulltrack_audiogs_3s_nonoverlap", "audiogs_3s_nonoverlap_fulltrack", 0.31),
+        ("eval_fulltrack_visual_center_0p5s_ola", "visual_center_overlap_add_fulltrack", 0.32),
+    ]:
+        _write_json(
+            root / f"runs/scene1_opera_c_soft_av_gaussians/{out_dir}/full_audio_summary.json",
+            {
+                "route": "C_soft_av_gaussians",
+                "eval_type": "fulltrack",
+                "protocol": protocol,
+                "camera": "cam10",
+                "MAG": mag,
+                "ENV": mag + 0.1,
+                "LRE": mag + 0.2,
+                "DPAM": None,
+                "DPAM_available": False,
+                "RTE": None,
+                "num_windows": 10,
+                "audio_window_seconds": 3.0 if "3s" in out_dir else 0.5,
+            },
+        )
     _write_json(
         root / "runs/scene1_opera_c_soft_av_gaussians/train_summary.json",
+        {"joint_steps": 228, "training_steps": 1228, "route": "C_soft_av_gaussians"},
+    )
+    for out_dir, protocol, mag in [
+        ("eval_fulltrack_audiogs_3s_nonoverlap", "audiogs_3s_nonoverlap_fulltrack", 0.30),
+        ("eval_fulltrack_visual_center_0p5s_ola", "visual_center_overlap_add_fulltrack", 0.33),
+    ]:
+        _write_json(
+            root
+            / f"runs/scene1_opera_c_soft_av_gaussians_stereo_reg/{out_dir}/full_audio_summary.json",
+            {
+                "route": "C_soft_av_gaussians",
+                "eval_type": "fulltrack",
+                "protocol": protocol,
+                "camera": "cam10",
+                "MAG": mag,
+                "ENV": mag + 0.1,
+                "LRE": mag + 0.2,
+                "DPAM": None,
+                "DPAM_available": False,
+                "RTE": None,
+                "num_windows": 10,
+                "audio_window_seconds": 3.0 if "3s" in out_dir else 0.5,
+            },
+        )
+    _write_json(
+        root / "runs/scene1_opera_c_soft_av_gaussians_stereo_reg/train_summary.json",
         {"joint_steps": 228, "training_steps": 1228, "route": "C_soft_av_gaussians"},
     )
     strict_summary = tmp_path / "strict.json"
@@ -165,6 +207,20 @@ def test_build_fair_comparison_rows_includes_required_methods_and_protocol_colum
             }
         ],
     )
+    strict_fulltrack_summary = tmp_path / "strict_fulltrack.json"
+    _write_json(
+        strict_fulltrack_summary,
+        {
+            "dataset": "scene1_opera",
+            "MAG": 0.08,
+            "ENV": 0.18,
+            "LRE": 0.28,
+            "DPAM": None,
+            "RTE": None,
+            "num_windows": 1,
+            "protocol": "audiogs_3s_nonoverlap_fulltrack",
+        },
+    )
 
     rows = build_fair_comparison_rows(
         root=root,
@@ -175,8 +231,10 @@ def test_build_fair_comparison_rows_includes_required_methods_and_protocol_colum
                 "route_b_run": "scene1_opera_b_joint_av_fair",
                 "route_b_no_warmup_run": "scene1_opera_b_joint_av_no_warmup_fair",
                 "route_c_run": "scene1_opera_c_soft_av_gaussians",
+                "route_c_stereo_reg_run": "scene1_opera_c_soft_av_gaussians_stereo_reg",
                 "ftgspp_scene": "scene1_opera",
                 "strict_audiogs_summary": str(strict_summary),
+                "strict_audiogs_fulltrack_summary": str(strict_fulltrack_summary),
                 "strict_audiogs_artifact": str(tmp_path),
             }
         ],
@@ -184,26 +242,77 @@ def test_build_fair_comparison_rows_includes_required_methods_and_protocol_colum
 
     methods = {(row["dataset"], row["method"]) for row in rows}
     assert ("scene1_opera", "Separate AudioGS baseline (source code)") in methods
+    assert ("scene1_opera", "Separate AudioGS baseline (source code full-track)") in methods
     assert ("scene1_opera", "Separate FreeTimeGS++ baseline (visual only)") in methods
     assert ("scene1_opera", "AVFusion joint warmup") in methods
     assert ("scene1_opera", "AVFusion joint no warmup") in methods
     assert ("scene1_opera", "AVFusion Route A frozen visual + audio head") in methods
-    assert ("scene1_opera", "AVFusion Route C soft acoustic Gaussians") in methods
+    assert (
+        "scene1_opera",
+        "AVFusion Route C soft acoustic Gaussians (AVFusion full-track AudioGS-style 3s non-overlap)",
+    ) in methods
+    assert (
+        "scene1_opera",
+        "AVFusion Route C soft acoustic Gaussians (AVFusion full-track visual-center 0.5s overlap-add)",
+    ) in methods
+    assert (
+        "scene1_opera",
+        "AVFusion Route C soft acoustic Gaussians + stereo regularization (AVFusion full-track AudioGS-style 3s non-overlap)",
+    ) in methods
     assert all(row["train_cams"] == 38 for row in rows)
     assert all(row["test_cam"] == "cam10" for row in rows)
     assert all(row["source"] == "near.wav" for row in rows)
     assert rows[0]["audio_eval_protocol"]
+    strict_fulltrack_row = next(
+        row for row in rows if row["method"] == "Separate AudioGS baseline (source code full-track)"
+    )
+    assert strict_fulltrack_row["audio_eval_protocol"] == "AudioGS source-code 3s non-overlap full-track"
+    assert strict_fulltrack_row["metric_scope"] == "full_track"
+    assert strict_fulltrack_row["MAG"] == 0.08
+    route_a_row = next(row for row in rows if row["method"] == "AVFusion Route A frozen visual + audio head")
+    assert route_a_row["audio_eval_protocol"] == "AVFusion full-track source-to-heldout audio"
+    assert route_a_row["metric_scope"] == "full_track"
+    assert route_a_row["dpam_protocol"] == "not_available"
+    assert route_a_row["MAG"] == 0.11
     joint_rows = [row for row in rows if str(row["method"]).startswith("AVFusion joint")]
     assert all(row["dpam_protocol"] == "sampled 16 visual-frame windows" for row in joint_rows)
-    route_c = next(row for row in rows if row["method"] == "AVFusion Route C soft acoustic Gaussians")
-    assert route_c["audio_eval_protocol"] == "AVFusion timed visual-frame audio window average (skip padding)"
-    assert route_c["dpam_protocol"] == "sampled 8 visual-frame windows"
+    assert all(row["metric_scope"] == "window_average" for row in joint_rows)
+    route_c = next(
+        row
+        for row in rows
+        if row["method"]
+        == "AVFusion Route C soft acoustic Gaussians (AVFusion full-track AudioGS-style 3s non-overlap)"
+    )
+    assert route_c["audio_eval_protocol"] == "AVFusion full-track AudioGS-style 3s non-overlap"
+    assert route_c["metric_scope"] == "full_track"
+    assert route_c["dpam_protocol"] == "not_available"
     assert route_c["visual_eval_frames"] == 10
     assert route_c["PSNR"] == 25.0
     assert route_c["steps_or_clips"] == 1228
+    route_c_stereo_reg = next(
+        row
+        for row in rows
+        if row["method"]
+        == "AVFusion Route C soft acoustic Gaussians + stereo regularization (AVFusion full-track AudioGS-style 3s non-overlap)"
+    )
+    assert route_c_stereo_reg["audio_eval_protocol"] == "AVFusion full-track AudioGS-style 3s non-overlap"
+    assert route_c_stereo_reg["metric_scope"] == "full_track"
+    assert route_c_stereo_reg["dpam_protocol"] == "not_available"
+    assert route_c_stereo_reg["MAG"] == 0.30
+    assert route_c_stereo_reg["steps_or_clips"] == 1228
+    route_c_fulltrack_rows = [
+        row
+        for row in rows
+        if str(row["method"]).startswith("AVFusion Route C soft acoustic Gaussians")
+    ]
+    assert len(route_c_fulltrack_rows) == 4
 
     out = tmp_path / "tables"
     write_fair_comparison_tables(rows, out)
     assert len(json.loads((out / "comparison.json").read_text())) == len(rows)
-    assert len(list(csv.DictReader((out / "comparison.csv").open()))) == len(rows)
-    assert "audio_eval_protocol" in (out / "comparison.md").read_text()
+    csv_rows = list(csv.DictReader((out / "comparison.csv").open()))
+    assert len(csv_rows) == len(rows)
+    assert "metric_scope" in csv_rows[0]
+    comparison_md = (out / "comparison.md").read_text()
+    assert "audio_eval_protocol" in comparison_md
+    assert "metric_scope" in comparison_md
