@@ -195,6 +195,7 @@ def audio_spatial_loss(
     tf_ild_weight: float = 0.0,
     coherence_weight: float = 0.0,
     phase_diff_weight: float = 0.0,
+    mono_diff_phase_weight: float = 0.0,
     energy_weight: float = 0.0,
 ) -> torch.Tensor:
     if pred.shape != target.shape:
@@ -210,6 +211,7 @@ def audio_spatial_loss(
         "tf_ild_weight": tf_ild_weight,
         "coherence_weight": coherence_weight,
         "phase_diff_weight": phase_diff_weight,
+        "mono_diff_phase_weight": mono_diff_phase_weight,
         "energy_weight": energy_weight,
     }.items():
         if value < 0:
@@ -253,6 +255,20 @@ def audio_spatial_loss(
                 torch.cos(torch.nan_to_num(target_phase_diff, nan=0.0, posinf=0.0, neginf=0.0)),
             )
             loss = loss + float(phase_diff_weight) * phase_diff
+
+    if mono_diff_phase_weight > 0:
+        window = torch.hamming_window(win_length, device=pred.device, dtype=pred.dtype)
+        pred_mid_spec = _stft_complex(0.5 * (pred[0:1] + pred[1:2]), n_fft, hop_length, win_length, window)[0]
+        pred_side_spec = _stft_complex(0.5 * (pred[0:1] - pred[1:2]), n_fft, hop_length, win_length, window)[0]
+        target_mid_spec = _stft_complex(0.5 * (target[0:1] + target[1:2]), n_fft, hop_length, win_length, window)[0]
+        target_side_spec = _stft_complex(0.5 * (target[0:1] - target[1:2]), n_fft, hop_length, win_length, window)[0]
+        pred_phase = torch.angle(pred_mid_spec) - torch.angle(pred_side_spec)
+        target_phase = torch.angle(target_mid_spec) - torch.angle(target_side_spec)
+        mono_diff_phase = F.l1_loss(
+            torch.cos(torch.nan_to_num(pred_phase, nan=0.0, posinf=0.0, neginf=0.0)),
+            torch.cos(torch.nan_to_num(target_phase, nan=0.0, posinf=0.0, neginf=0.0)),
+        )
+        loss = loss + float(mono_diff_phase_weight) * mono_diff_phase
 
     if coherence_weight > 0:
         pred_coherence = F.cosine_similarity(pred[0], pred[1], dim=0, eps=1e-8)

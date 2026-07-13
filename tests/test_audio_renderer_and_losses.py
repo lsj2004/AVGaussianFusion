@@ -201,6 +201,39 @@ def test_audio_spatial_loss_penalizes_tf_ild_errors():
     assert swapped.grad.abs().sum() > 0
 
 
+def test_audio_spatial_loss_penalizes_mono_diff_phase_errors():
+    t = torch.linspace(0, 24.0, 4096)
+    target_mid = torch.sin(t)
+    target_side = 0.25 * torch.cos(t)
+    target = torch.stack([target_mid + target_side, target_mid - target_side])
+    pred_side = 0.25 * torch.sin(t)
+    pred = torch.stack([target_mid + pred_side, target_mid - pred_side]).requires_grad_(True)
+    matched = target.clone().requires_grad_(True)
+
+    matched_loss = audio_spatial_loss(
+        matched,
+        target,
+        mono_diff_phase_weight=1.0,
+        n_fft=256,
+        hop_length=64,
+        win_length=256,
+    )
+    phase_loss = audio_spatial_loss(
+        pred,
+        target,
+        mono_diff_phase_weight=1.0,
+        n_fft=256,
+        hop_length=64,
+        win_length=256,
+    )
+
+    assert matched_loss < 1e-6
+    assert phase_loss > matched_loss + 0.01
+    phase_loss.backward()
+    assert pred.grad is not None
+    assert pred.grad.abs().sum() > 0
+
+
 def test_frequency_transfer_renderer_preserves_source_side_channel():
     renderer = FrequencyTransferRenderer(n_fft=256, hop_length=64, win_length=256)
     state = {
@@ -245,3 +278,35 @@ def test_frequency_transfer_renderer_uses_learnable_side_response():
     reduced_side = renderer(reduced_side_state, source)[0] - renderer(reduced_side_state, source)[1]
 
     assert reduced_side.abs().mean() < original_side.abs().mean()
+
+
+def test_frequency_transfer_renderer_geometry_diff_head_modulates_stereo_from_source_ild():
+    renderer = FrequencyTransferRenderer(
+        n_fft=256,
+        hop_length=64,
+        win_length=256,
+        use_geometry_diff_head=True,
+    )
+    with torch.no_grad():
+        renderer.geometry_diff_head.weight.zero_()
+        renderer.geometry_diff_head.bias.zero_()
+        renderer.geometry_diff_head.weight[0, 3] = 0.5
+    state = {
+        "xyz": torch.tensor([[1.0, 0.0, 1.0], [1.0, 0.0, 2.0], [1.0, 0.0, 3.0], [1.0, 0.0, 4.0]]),
+        "opacity": torch.zeros(4, 1),
+        "audio_opacity": torch.zeros(4, 1),
+        "mono_response": torch.zeros(4, renderer.num_frequency_bins),
+        "diff_response": torch.zeros(4, renderer.num_frequency_bins),
+        "distance_decay": torch.zeros(4, renderer.num_frequency_bins),
+        "phase_delay": torch.zeros(4, renderer.num_frequency_bins),
+    }
+    base = torch.sin(torch.linspace(0, 24.0, 4096))
+    left_louder = torch.stack([1.25 * base, 0.75 * base])
+    right_louder = torch.stack([0.75 * base, 1.25 * base])
+
+    _, left_debug = renderer(state, left_louder, return_debug=True)
+    _, right_debug = renderer(state, right_louder, return_debug=True)
+
+    assert left_debug["geometry_diff_delta"].mean() > 0
+    assert right_debug["geometry_diff_delta"].mean() < 0
+    assert not torch.allclose(left_debug["diff_transfer"], right_debug["diff_transfer"])

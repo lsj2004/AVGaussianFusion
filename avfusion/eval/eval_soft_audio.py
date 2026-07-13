@@ -45,7 +45,11 @@ def _restore_soft_model(checkpoint: dict) -> tuple[AcousticGaussianField, Freque
         hop_length=int(renderer_config.get("hop_length", 160)),
         win_length=int(renderer_config.get("win_length", 400)),
         use_phase_delay=bool(renderer_config.get("use_phase_delay", False)),
+        use_geometry_diff_head=bool(renderer_config.get("use_geometry_diff_head", False)),
+        geometry_diff_scale=float(renderer_config.get("geometry_diff_scale", 0.25)),
     )
+    if isinstance(renderer_config.get("state_dict"), dict):
+        renderer.load_state_dict(renderer_config["state_dict"], strict=False)
     field.eval()
     renderer.eval()
     return field, renderer

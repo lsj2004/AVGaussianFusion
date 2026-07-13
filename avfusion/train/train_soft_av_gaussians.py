@@ -46,6 +46,8 @@ class SoftTrainingConfig:
     audio_long_window_fraction: float = 0.0
     audio_long_crop_mode: str = "start"
     audio_renderer_use_phase_delay: bool = False
+    audio_renderer_use_geometry_diff_head: bool = False
+    audio_renderer_geometry_diff_scale: float = 0.25
     ftgspp_memmap: str | None = None
     visual_scale: float = 0.125
     audio_loss_type: str = "audiogs_mono_diff"
@@ -56,10 +58,13 @@ class SoftTrainingConfig:
     audio_band_lre_loss_weight: float = 0.0
     audio_coherence_loss_weight: float = 0.0
     audio_phase_diff_loss_weight: float = 0.0
+    audio_mono_diff_phase_loss_weight: float = 0.0
     audio_energy_balance_loss_weight: float = 0.0
     audio_tf_ild_loss_weight: float = 0.0
     diff_response_l2_weight: float = 0.0
     diff_response_smooth_weight: float = 0.0
+    diff_directional_response_l2_weight: float = 0.0
+    diff_directional_response_smooth_weight: float = 0.0
     side_response_l2_weight: float = 0.0
     side_response_smooth_weight: float = 0.0
     audio_bandpass: dict[str, float | bool] | None = None
@@ -168,6 +173,8 @@ def resolve_soft_training_config(args: argparse.Namespace) -> SoftTrainingConfig
         audio_long_window_fraction=float(train.get("audio_long_window_fraction", 0.0)),
         audio_long_crop_mode=str(train.get("audio_long_crop_mode", "start")),
         audio_renderer_use_phase_delay=bool(train.get("audio_renderer_use_phase_delay", False)),
+        audio_renderer_use_geometry_diff_head=bool(train.get("audio_renderer_use_geometry_diff_head", False)),
+        audio_renderer_geometry_diff_scale=float(train.get("audio_renderer_geometry_diff_scale", 0.25)),
         anchored_fraction=float(train.get("anchored_fraction", 0.6)),
         dynamic_fraction=float(train.get("dynamic_fraction", 0.2)),
         anchor_weight=float(losses.get("anchor_weight", 1e-3)),
@@ -187,10 +194,13 @@ def resolve_soft_training_config(args: argparse.Namespace) -> SoftTrainingConfig
         audio_band_lre_loss_weight=float(losses.get("audio_band_lre_loss_weight", 0.0)),
         audio_coherence_loss_weight=float(losses.get("audio_coherence_loss_weight", 0.0)),
         audio_phase_diff_loss_weight=float(losses.get("audio_phase_diff_loss_weight", 0.0)),
+        audio_mono_diff_phase_loss_weight=float(losses.get("audio_mono_diff_phase_loss_weight", 0.0)),
         audio_energy_balance_loss_weight=float(losses.get("audio_energy_balance_loss_weight", 0.0)),
         audio_tf_ild_loss_weight=float(losses.get("audio_tf_ild_loss_weight", 0.0)),
         diff_response_l2_weight=float(losses.get("diff_response_l2_weight", 0.0)),
         diff_response_smooth_weight=float(losses.get("diff_response_smooth_weight", 0.0)),
+        diff_directional_response_l2_weight=float(losses.get("diff_directional_response_l2_weight", 0.0)),
+        diff_directional_response_smooth_weight=float(losses.get("diff_directional_response_smooth_weight", 0.0)),
         side_response_l2_weight=float(losses.get("side_response_l2_weight", 0.0)),
         side_response_smooth_weight=float(losses.get("side_response_smooth_weight", 0.0)),
         audio_bandpass=dict(audio_bandpass) if isinstance(audio_bandpass, dict) else None,
@@ -234,6 +244,7 @@ def compute_audio_training_loss(
                 cfg.audio_tf_ild_loss_weight,
                 cfg.audio_coherence_loss_weight,
                 cfg.audio_phase_diff_loss_weight,
+                cfg.audio_mono_diff_phase_loss_weight,
                 cfg.audio_energy_balance_loss_weight,
             )
         ):
@@ -244,6 +255,7 @@ def compute_audio_training_loss(
                 tf_ild_weight=cfg.audio_tf_ild_loss_weight,
                 coherence_weight=cfg.audio_coherence_loss_weight,
                 phase_diff_weight=cfg.audio_phase_diff_loss_weight,
+                mono_diff_phase_weight=cfg.audio_mono_diff_phase_loss_weight,
                 energy_weight=cfg.audio_energy_balance_loss_weight,
             )
         return loss
@@ -262,14 +274,23 @@ def compute_total_soft_loss(
     coupling = soft_coupling_losses(acoustic_field, acoustic_state, visual_state)
     coupling_scale = float(coupling_scale)
     diff_response = acoustic_state["diff_response"]
+    diff_directional_response = acoustic_state.get(
+        "diff_directional_response",
+        diff_response.new_zeros(diff_response.shape[0], 3, diff_response.shape[-1]),
+    )
     side_response = acoustic_state.get("side_response", diff_response.new_zeros(diff_response.shape))
     diff_response_l2 = diff_response.square().mean()
+    diff_directional_response_l2 = diff_directional_response.square().mean()
     side_response_l2 = side_response.square().mean()
     if diff_response.shape[-1] > 1:
         diff_response_smooth = (diff_response[..., 1:] - diff_response[..., :-1]).square().mean()
+        diff_directional_response_smooth = (
+            diff_directional_response[..., 1:] - diff_directional_response[..., :-1]
+        ).square().mean()
         side_response_smooth = (side_response[..., 1:] - side_response[..., :-1]).square().mean()
     else:
         diff_response_smooth = diff_response.new_zeros(())
+        diff_directional_response_smooth = diff_directional_response.new_zeros(())
         side_response_smooth = side_response.new_zeros(())
     total = (
         cfg.audio_weight * audio_loss
@@ -280,6 +301,8 @@ def compute_total_soft_loss(
         + cfg.sparse_weight * coupling["sparse"]
         + cfg.diff_response_l2_weight * diff_response_l2
         + cfg.diff_response_smooth_weight * diff_response_smooth
+        + cfg.diff_directional_response_l2_weight * diff_directional_response_l2
+        + cfg.diff_directional_response_smooth_weight * diff_directional_response_smooth
         + cfg.side_response_l2_weight * side_response_l2
         + cfg.side_response_smooth_weight * side_response_smooth
     )
@@ -293,6 +316,8 @@ def compute_total_soft_loss(
         "sparse": coupling["sparse"].detach(),
         "diff_response_l2": diff_response_l2.detach(),
         "diff_response_smooth": diff_response_smooth.detach(),
+        "diff_directional_response_l2": diff_directional_response_l2.detach(),
+        "diff_directional_response_smooth": diff_directional_response_smooth.detach(),
         "side_response_l2": side_response_l2.detach(),
         "side_response_smooth": side_response_smooth.detach(),
         "coupling_scale": audio_loss.new_tensor(coupling_scale),
@@ -326,9 +351,12 @@ def save_soft_checkpoint(
             "audio_renderer": {
                 "n_fft": audio_renderer.n_fft,
                 "hop_length": audio_renderer.hop_length,
-                "win_length": audio_renderer.win_length,
-                "use_phase_delay": audio_renderer.use_phase_delay,
-            },
+            "win_length": audio_renderer.win_length,
+            "use_phase_delay": audio_renderer.use_phase_delay,
+            "use_geometry_diff_head": audio_renderer.use_geometry_diff_head,
+            "geometry_diff_scale": audio_renderer.geometry_diff_scale,
+            "state_dict": audio_renderer.state_dict(),
+        },
             "config": asdict(config),
             "loss_history": loss_history,
         },
@@ -350,14 +378,19 @@ def train_soft_av_gaussians(
         anchored_fraction=cfg.anchored_fraction,
         dynamic_fraction=cfg.dynamic_fraction,
     ).to(device)
-    audio_renderer = FrequencyTransferRenderer(use_phase_delay=cfg.audio_renderer_use_phase_delay).to(device)
+    audio_renderer = FrequencyTransferRenderer(
+        use_phase_delay=cfg.audio_renderer_use_phase_delay,
+        use_geometry_diff_head=cfg.audio_renderer_use_geometry_diff_head,
+        geometry_diff_scale=cfg.audio_renderer_geometry_diff_scale,
+    ).to(device)
     for parameter in bridge.gaussians.parameters():
         parameter.requires_grad_(False)
 
-    optimizer = torch.optim.Adam(
-        acoustic_field.parameters(),
-        lr=cfg.acoustic_lr,
-    )
+    parameter_groups = [{"params": list(acoustic_field.parameters()), "lr": cfg.acoustic_lr}]
+    renderer_parameters = [parameter for parameter in audio_renderer.parameters() if parameter.requires_grad]
+    if renderer_parameters:
+        parameter_groups.append({"params": renderer_parameters, "lr": cfg.audio_lr})
+    optimizer = torch.optim.Adam(parameter_groups)
     visual_dataset = VisualFrameDataset(
         cfg.manifest,
         split="train",

@@ -13,6 +13,8 @@ class FrequencyTransferRenderer(nn.Module):
         min_transfer: float = 0.05,
         max_transfer: float = 4.0,
         use_phase_delay: bool = False,
+        use_geometry_diff_head: bool = False,
+        geometry_diff_scale: float = 0.25,
     ):
         super().__init__()
         if n_fft <= 0 or hop_length <= 0 or win_length <= 0:
@@ -23,6 +25,12 @@ class FrequencyTransferRenderer(nn.Module):
         self.min_transfer = float(min_transfer)
         self.max_transfer = float(max_transfer)
         self.use_phase_delay = bool(use_phase_delay)
+        self.use_geometry_diff_head = bool(use_geometry_diff_head)
+        self.geometry_diff_scale = float(geometry_diff_scale)
+        if self.use_geometry_diff_head:
+            self.geometry_diff_head = nn.Linear(6, 1)
+            nn.init.zeros_(self.geometry_diff_head.weight)
+            nn.init.zeros_(self.geometry_diff_head.bias)
 
     @property
     def num_frequency_bins(self) -> int:
@@ -45,12 +53,24 @@ class FrequencyTransferRenderer(nn.Module):
         self,
         state: dict[str, Tensor],
         camera_w2c: Tensor | None = None,
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+        source_ild: Tensor | None = None,
+        source_side_mag: Tensor | None = None,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor | None]:
         xyz = state["xyz"]
         opacity = state["opacity"]
         audio_opacity = state["audio_opacity"]
         mono_response = state["mono_response"]
         diff_response = state["diff_response"]
+        diff_directional_response = state.get(
+            "diff_directional_response",
+            torch.zeros(
+                diff_response.shape[0],
+                3,
+                diff_response.shape[-1],
+                device=diff_response.device,
+                dtype=diff_response.dtype,
+            ),
+        )
         side_response = state.get("side_response", torch.zeros_like(mono_response))
         distance_decay = state["distance_decay"]
         phase_delay = state["phase_delay"]
@@ -61,6 +81,7 @@ class FrequencyTransferRenderer(nn.Module):
             )
         if (
             diff_response.shape != mono_response.shape
+            or diff_directional_response.shape != (mono_response.shape[0], 3, mono_response.shape[-1])
             or side_response.shape != mono_response.shape
             or distance_decay.shape != mono_response.shape
         ):
@@ -70,19 +91,45 @@ class FrequencyTransferRenderer(nn.Module):
         distance = camera_xyz.norm(dim=-1, keepdim=True).clamp_min(1e-4)
         direction = camera_xyz / distance
         side = direction[:, 0:1]
+        front = direction[:, 2:3]
+        inv_distance = 1.0 / distance
         activity = torch.softmax((opacity + audio_opacity).reshape(-1), dim=0).reshape(-1, 1)
         attenuation = torch.exp(-torch.nn.functional.softplus(distance_decay) * torch.log1p(distance))
 
         mono = 1.0 + (activity * torch.tanh(mono_response) * attenuation).sum(dim=0)
-        diff = (activity * torch.tanh(diff_response) * side * attenuation).sum(dim=0).clamp(-0.95, 0.95)
+        directional_diff = (torch.tanh(diff_directional_response) * direction.unsqueeze(-1)).sum(dim=1)
+        diff = (activity * torch.tanh(diff_response + directional_diff) * side * attenuation).sum(dim=0).clamp(-0.95, 0.95)
         side_keep = 1.0 + (activity * torch.tanh(side_response) * attenuation).sum(dim=0)
         mid_transfer = mono.clamp(self.min_transfer, self.max_transfer)
         side_transfer = (mono * side_keep).clamp(self.min_transfer, self.max_transfer)
+        geometry_diff_delta = None
+        if self.use_geometry_diff_head:
+            if source_ild is None:
+                source_ild = mono_response.new_zeros(self.num_frequency_bins)
+            if source_side_mag is None:
+                source_side_mag = mono_response.new_zeros(self.num_frequency_bins)
+            freq = torch.linspace(-1.0, 1.0, self.num_frequency_bins, device=mono_response.device, dtype=mono_response.dtype)
+            side_feature = (activity * side).sum(dim=0).expand_as(freq)
+            front_feature = (activity * front).sum(dim=0).expand_as(freq)
+            inv_distance_feature = (activity * inv_distance).sum(dim=0).expand_as(freq)
+            features = torch.stack(
+                [
+                    side_feature,
+                    front_feature,
+                    inv_distance_feature,
+                    source_ild.to(device=mono_response.device, dtype=mono_response.dtype),
+                    source_side_mag.to(device=mono_response.device, dtype=mono_response.dtype),
+                    freq,
+                ],
+                dim=-1,
+            )
+            geometry_diff_delta = self.geometry_diff_scale * torch.tanh(self.geometry_diff_head(features).squeeze(-1))
+            diff = (diff + geometry_diff_delta).clamp(-0.95, 0.95)
         diff_transfer = (mono * diff).clamp(-self.max_transfer, self.max_transfer)
         left_transfer = (mid_transfer + diff_transfer).clamp(self.min_transfer, self.max_transfer)
         right_transfer = (mid_transfer - diff_transfer).clamp(self.min_transfer, self.max_transfer)
         phase = (activity * torch.tanh(phase_delay)).sum(dim=0)
-        return mid_transfer, side_transfer, diff_transfer, left_transfer, right_transfer, phase
+        return mid_transfer, side_transfer, diff_transfer, left_transfer, right_transfer, phase, geometry_diff_delta
 
     def forward(
         self,
@@ -117,9 +164,17 @@ class FrequencyTransferRenderer(nn.Module):
         )[0]
         mid_spec = 0.5 * (spec_l + spec_r)
         side_spec = 0.5 * (spec_l - spec_r)
-        mid_transfer, side_transfer, diff_transfer, left_transfer, right_transfer, phase = self._render_transfer(
+        source_ild = None
+        source_side_mag = None
+        if self.use_geometry_diff_head:
+            eps = source_audio.new_tensor(1e-7)
+            source_ild = (torch.log(spec_l.abs().clamp_min(eps)) - torch.log(spec_r.abs().clamp_min(eps))).mean(dim=-1)
+            source_side_mag = side_spec.abs().mean(dim=-1)
+        mid_transfer, side_transfer, diff_transfer, left_transfer, right_transfer, phase, geometry_diff_delta = self._render_transfer(
             state,
             camera_w2c=camera_w2c,
+            source_ild=source_ild,
+            source_side_mag=source_side_mag,
         )
         mid_tf = mid_transfer.reshape(-1, 1).expand_as(mid_spec)
         side_tf = side_transfer.reshape(-1, 1).expand_as(side_spec)
@@ -157,6 +212,9 @@ class FrequencyTransferRenderer(nn.Module):
             "mid_transfer": mid_transfer,
             "side_transfer": side_transfer,
             "diff_transfer": diff_transfer,
+            "geometry_diff_delta": geometry_diff_delta
+            if geometry_diff_delta is not None
+            else torch.zeros_like(diff_transfer),
             "left_transfer": left_transfer,
             "right_transfer": right_transfer,
             "phase": phase,

@@ -109,6 +109,54 @@ def test_soft_config_reads_tf_ild_and_mixed_window_controls(tmp_path):
     assert cfg.audio_long_crop_mode == "start"
 
 
+def test_soft_config_reads_geometry_diff_head_controls(tmp_path):
+    config_path = tmp_path / "route_c.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "paths:",
+                "  manifest: /data/scene_manifest.json",
+                "  ftgspp_checkpoint: /data/gaussians.pt",
+                "  output_checkpoint: /out/soft.pt",
+                "train:",
+                "  audio_renderer_use_geometry_diff_head: true",
+                "  audio_renderer_geometry_diff_scale: 0.5",
+            ]
+        )
+        + "\n"
+    )
+
+    cfg = resolve_soft_training_config(build_arg_parser().parse_args(["--config", str(config_path)]))
+
+    assert cfg.audio_renderer_use_geometry_diff_head is True
+    assert cfg.audio_renderer_geometry_diff_scale == 0.5
+
+
+def test_soft_config_reads_directional_diff_and_phase_controls(tmp_path):
+    config_path = tmp_path / "route_c.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "paths:",
+                "  manifest: /data/scene_manifest.json",
+                "  ftgspp_checkpoint: /data/gaussians.pt",
+                "  output_checkpoint: /out/soft.pt",
+                "losses:",
+                "  audio_mono_diff_phase_loss_weight: 0.03",
+                "  diff_directional_response_l2_weight: 0.004",
+                "  diff_directional_response_smooth_weight: 0.005",
+            ]
+        )
+        + "\n"
+    )
+
+    cfg = resolve_soft_training_config(build_arg_parser().parse_args(["--config", str(config_path)]))
+
+    assert cfg.audio_mono_diff_phase_loss_weight == 0.03
+    assert cfg.diff_directional_response_l2_weight == 0.004
+    assert cfg.diff_directional_response_smooth_weight == 0.005
+
+
 def test_long_audio_window_schedule_is_deterministic():
     assert [use_long_audio_window_for_step(step, 0.3) for step in range(10)] == [
         True,

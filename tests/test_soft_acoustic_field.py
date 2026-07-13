@@ -28,6 +28,7 @@ def test_acoustic_field_queries_independent_trainable_state():
         + state["velocity"].sum()
         + state["mono_response"].sum()
         + state["diff_response"].sum()
+        + state["diff_directional_response"].sum()
     )
     loss.backward()
 
@@ -36,6 +37,7 @@ def test_acoustic_field_queries_independent_trainable_state():
     assert state["velocity"].shape == (6, 3)
     assert state["mono_response"].shape == (6, 257)
     assert state["diff_response"].shape == (6, 257)
+    assert state["diff_directional_response"].shape == (6, 3, 257)
     assert state["distance_decay"].shape == (6, 257)
     assert state["phase_delay"].shape == (6, 257)
     assert state["audio_opacity"].shape == (6, 1)
@@ -44,6 +46,15 @@ def test_acoustic_field_queries_independent_trainable_state():
     assert field.velocity_model.grad is not None
     assert field.mono_response.grad is not None
     assert field.diff_response.grad is not None
+    assert field.diff_directional_response.grad is not None
+
+
+def test_acoustic_field_initializes_directional_diff_basis():
+    field = AcousticGaussianField.from_visual_state(_visual_state(), num_points=4, num_frequency_bins=8)
+    state = field.query(torch.tensor([[0.0]]))
+
+    assert state["diff_directional_response"].shape == (4, 3, 8)
+    assert torch.allclose(state["diff_directional_response"], torch.zeros_like(state["diff_directional_response"]))
 
 
 def test_acoustic_field_records_visual_anchor_groups():

@@ -168,11 +168,16 @@ def test_route_c_stereo_regularization_configs_use_separate_outputs_and_stronger
         assert cfg["train"]["audio_long_window_fraction"] == 0.7
         assert cfg["train"]["audio_long_crop_mode"] == "start"
         assert cfg["losses"]["audio_tf_diff_ratio_loss_weight"] == 0.1
+        assert cfg["train"]["audio_renderer_use_geometry_diff_head"] is True
+        assert cfg["train"]["audio_renderer_geometry_diff_scale"] == 0.25
         assert cfg["losses"]["audio_band_lre_loss_weight"] == 0.2
         assert cfg["losses"]["audio_tf_ild_loss_weight"] == 0.2
         assert cfg["losses"]["audio_coherence_loss_weight"] == 0.05
         assert cfg["losses"]["audio_phase_diff_loss_weight"] == 0.02
+        assert cfg["losses"]["audio_mono_diff_phase_loss_weight"] == 0.02
         assert cfg["losses"]["audio_energy_balance_loss_weight"] == 0.01
+        assert cfg["losses"]["diff_directional_response_l2_weight"] == 0.0001
+        assert cfg["losses"]["diff_directional_response_smooth_weight"] == 0.001
         assert cfg["losses"]["diff_response_l2_weight"] == 0.0001
         assert cfg["losses"]["diff_response_smooth_weight"] == 0.001
         assert cfg["losses"]["side_response_l2_weight"] == 0.0001
@@ -203,9 +208,14 @@ def test_route_c_mid_side_phase_configs_enable_phase_delay():
         assert cfg["train"]["audio_long_window_seconds"] == 3.0
         assert cfg["train"]["audio_long_window_fraction"] == 0.7
         assert cfg["train"]["audio_long_crop_mode"] == "start"
+        assert cfg["train"]["audio_renderer_use_geometry_diff_head"] is True
+        assert cfg["train"]["audio_renderer_geometry_diff_scale"] == 0.25
         assert cfg["losses"]["audio_phase_diff_loss_weight"] == 0.05
+        assert cfg["losses"]["audio_mono_diff_phase_loss_weight"] == 0.02
         assert cfg["losses"]["audio_band_lre_loss_weight"] == 0.2
         assert cfg["losses"]["audio_tf_ild_loss_weight"] == 0.2
+        assert cfg["losses"]["diff_directional_response_l2_weight"] == 0.0001
+        assert cfg["losses"]["diff_directional_response_smooth_weight"] == 0.001
 
 
 def test_route_c_mid_side_phase_scripts_point_to_phase_configs():
