@@ -171,6 +171,36 @@ def test_audio_spatial_loss_penalizes_stereo_errors():
     assert swapped.grad.abs().sum() > 0
 
 
+def test_audio_spatial_loss_penalizes_tf_ild_errors():
+    base = torch.sin(torch.linspace(0, 24.0, 4096))
+    target = torch.stack([1.2 * base, 0.8 * base])
+    matched = target.clone().requires_grad_(True)
+    swapped = torch.stack([0.8 * base, 1.2 * base]).requires_grad_(True)
+
+    matched_loss = audio_spatial_loss(
+        matched,
+        target,
+        tf_ild_weight=1.0,
+        n_fft=256,
+        hop_length=64,
+        win_length=256,
+    )
+    swapped_loss = audio_spatial_loss(
+        swapped,
+        target,
+        tf_ild_weight=1.0,
+        n_fft=256,
+        hop_length=64,
+        win_length=256,
+    )
+
+    assert matched_loss < 1e-6
+    assert swapped_loss > matched_loss + 0.1
+    swapped_loss.backward()
+    assert swapped.grad is not None
+    assert swapped.grad.abs().sum() > 0
+
+
 def test_frequency_transfer_renderer_preserves_source_side_channel():
     renderer = FrequencyTransferRenderer(n_fft=256, hop_length=64, win_length=256)
     state = {

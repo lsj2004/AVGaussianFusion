@@ -6,6 +6,7 @@ from avfusion.train.train_soft_av_gaussians import (
     build_arg_parser,
     compute_total_soft_loss,
     coupling_scale_for_step,
+    use_long_audio_window_for_step,
     resolve_soft_training_config,
 )
 
@@ -78,6 +79,51 @@ def test_soft_config_reads_tf_diff_ratio_loss_controls(tmp_path):
     assert cfg.audio_lre_loss_weight == 0.2
     assert cfg.audio_tf_diff_ratio_loss_weight == 0.05
     assert cfg.audio_tf_diff_ratio_margin_db == 1.0
+
+
+def test_soft_config_reads_tf_ild_and_mixed_window_controls(tmp_path):
+    config_path = tmp_path / "route_c.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "paths:",
+                "  manifest: /data/scene_manifest.json",
+                "  ftgspp_checkpoint: /data/gaussians.pt",
+                "  output_checkpoint: /out/soft.pt",
+                "train:",
+                "  audio_long_window_seconds: 3.0",
+                "  audio_long_window_fraction: 0.7",
+                "  audio_long_crop_mode: start",
+                "losses:",
+                "  audio_tf_ild_loss_weight: 0.2",
+            ]
+        )
+        + "\n"
+    )
+
+    cfg = resolve_soft_training_config(build_arg_parser().parse_args(["--config", str(config_path)]))
+
+    assert cfg.audio_tf_ild_loss_weight == 0.2
+    assert cfg.audio_long_window_seconds == 3.0
+    assert cfg.audio_long_window_fraction == 0.7
+    assert cfg.audio_long_crop_mode == "start"
+
+
+def test_long_audio_window_schedule_is_deterministic():
+    assert [use_long_audio_window_for_step(step, 0.3) for step in range(10)] == [
+        True,
+        True,
+        True,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+    ]
+    assert not any(use_long_audio_window_for_step(step, 0.0) for step in range(10))
+    assert all(use_long_audio_window_for_step(step, 1.0) for step in range(10))
 
 
 def test_soft_config_reads_diff_response_regularization_controls(tmp_path):

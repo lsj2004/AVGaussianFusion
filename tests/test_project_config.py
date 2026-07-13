@@ -164,8 +164,12 @@ def test_route_c_stereo_regularization_configs_use_separate_outputs_and_stronger
         assert cfg["paths"]["output_checkpoint"].endswith(f"/runs/{run_name}/soft_av.pt")
         assert cfg["losses"]["audio_lre_loss_weight"] == 0.3
         assert cfg["train"]["audio_renderer_use_phase_delay"] is False
+        assert cfg["train"]["audio_long_window_seconds"] == 3.0
+        assert cfg["train"]["audio_long_window_fraction"] == 0.7
+        assert cfg["train"]["audio_long_crop_mode"] == "start"
         assert cfg["losses"]["audio_tf_diff_ratio_loss_weight"] == 0.1
         assert cfg["losses"]["audio_band_lre_loss_weight"] == 0.2
+        assert cfg["losses"]["audio_tf_ild_loss_weight"] == 0.2
         assert cfg["losses"]["audio_coherence_loss_weight"] == 0.05
         assert cfg["losses"]["audio_phase_diff_loss_weight"] == 0.02
         assert cfg["losses"]["audio_energy_balance_loss_weight"] == 0.01
@@ -196,8 +200,12 @@ def test_route_c_mid_side_phase_configs_enable_phase_delay():
         assert cfg["paths"]["output_dir"].endswith(f"/runs/{run_name}")
         assert cfg["paths"]["output_checkpoint"].endswith(f"/runs/{run_name}/soft_av.pt")
         assert cfg["train"]["audio_renderer_use_phase_delay"] is True
+        assert cfg["train"]["audio_long_window_seconds"] == 3.0
+        assert cfg["train"]["audio_long_window_fraction"] == 0.7
+        assert cfg["train"]["audio_long_crop_mode"] == "start"
         assert cfg["losses"]["audio_phase_diff_loss_weight"] == 0.05
         assert cfg["losses"]["audio_band_lre_loss_weight"] == 0.2
+        assert cfg["losses"]["audio_tf_ild_loss_weight"] == 0.2
 
 
 def test_route_c_mid_side_phase_scripts_point_to_phase_configs():

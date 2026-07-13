@@ -42,6 +42,9 @@ class SoftTrainingConfig:
     audio_weight: float
     visual_guard_psnr_drop_db: float
     audio_guard_relative_drop: float
+    audio_long_window_seconds: float = 3.0
+    audio_long_window_fraction: float = 0.0
+    audio_long_crop_mode: str = "start"
     audio_renderer_use_phase_delay: bool = False
     ftgspp_memmap: str | None = None
     visual_scale: float = 0.125
@@ -54,6 +57,7 @@ class SoftTrainingConfig:
     audio_coherence_loss_weight: float = 0.0
     audio_phase_diff_loss_weight: float = 0.0
     audio_energy_balance_loss_weight: float = 0.0
+    audio_tf_ild_loss_weight: float = 0.0
     diff_response_l2_weight: float = 0.0
     diff_response_smooth_weight: float = 0.0
     side_response_l2_weight: float = 0.0
@@ -108,6 +112,17 @@ def _required(value: str | None, name: str) -> str:
     return value
 
 
+def use_long_audio_window_for_step(step: int, fraction: float) -> bool:
+    fraction = min(1.0, max(0.0, float(fraction)))
+    if fraction <= 0.0:
+        return False
+    if fraction >= 1.0:
+        return True
+    period = 10
+    long_slots = int(round(fraction * period))
+    return int(step) % period < long_slots
+
+
 def resolve_soft_training_config(args: argparse.Namespace) -> SoftTrainingConfig:
     config = _load_yaml_config(args.config)
     train = _section(config, "train")
@@ -149,6 +164,9 @@ def resolve_soft_training_config(args: argparse.Namespace) -> SoftTrainingConfig
         shared_lr=float(train.get("shared_lr", 0.0)),
         audio_window_seconds=audio_window_seconds,
         audio_crop_mode=str(train.get("audio_crop_mode", "center")),
+        audio_long_window_seconds=float(train.get("audio_long_window_seconds", 3.0)),
+        audio_long_window_fraction=float(train.get("audio_long_window_fraction", 0.0)),
+        audio_long_crop_mode=str(train.get("audio_long_crop_mode", "start")),
         audio_renderer_use_phase_delay=bool(train.get("audio_renderer_use_phase_delay", False)),
         anchored_fraction=float(train.get("anchored_fraction", 0.6)),
         dynamic_fraction=float(train.get("dynamic_fraction", 0.2)),
@@ -170,6 +188,7 @@ def resolve_soft_training_config(args: argparse.Namespace) -> SoftTrainingConfig
         audio_coherence_loss_weight=float(losses.get("audio_coherence_loss_weight", 0.0)),
         audio_phase_diff_loss_weight=float(losses.get("audio_phase_diff_loss_weight", 0.0)),
         audio_energy_balance_loss_weight=float(losses.get("audio_energy_balance_loss_weight", 0.0)),
+        audio_tf_ild_loss_weight=float(losses.get("audio_tf_ild_loss_weight", 0.0)),
         diff_response_l2_weight=float(losses.get("diff_response_l2_weight", 0.0)),
         diff_response_smooth_weight=float(losses.get("diff_response_smooth_weight", 0.0)),
         side_response_l2_weight=float(losses.get("side_response_l2_weight", 0.0)),
@@ -179,6 +198,14 @@ def resolve_soft_training_config(args: argparse.Namespace) -> SoftTrainingConfig
     )
     if cfg.audio_crop_mode not in {"center", "start"}:
         raise ValueError(f"audio_crop_mode must be center or start, got {cfg.audio_crop_mode!r}")
+    if cfg.audio_long_crop_mode not in {"center", "start"}:
+        raise ValueError(f"audio_long_crop_mode must be center or start, got {cfg.audio_long_crop_mode!r}")
+    if cfg.audio_long_window_seconds <= 0:
+        raise ValueError(f"audio_long_window_seconds must be positive, got {cfg.audio_long_window_seconds}")
+    if not 0 <= cfg.audio_long_window_fraction <= 1:
+        raise ValueError(
+            f"audio_long_window_fraction must be in [0, 1], got {cfg.audio_long_window_fraction}"
+        )
     if cfg.num_acoustic_points < 2 or cfg.top_k < 2:
         raise ValueError("num_acoustic_points and top_k must be at least 2")
     return cfg
@@ -204,6 +231,7 @@ def compute_audio_training_loss(
             weight > 0
             for weight in (
                 cfg.audio_band_lre_loss_weight,
+                cfg.audio_tf_ild_loss_weight,
                 cfg.audio_coherence_loss_weight,
                 cfg.audio_phase_diff_loss_weight,
                 cfg.audio_energy_balance_loss_weight,
@@ -213,6 +241,7 @@ def compute_audio_training_loss(
                 pred,
                 target,
                 band_lre_weight=cfg.audio_band_lre_loss_weight,
+                tf_ild_weight=cfg.audio_tf_ild_loss_weight,
                 coherence_weight=cfg.audio_coherence_loss_weight,
                 phase_diff_weight=cfg.audio_phase_diff_loss_weight,
                 energy_weight=cfg.audio_energy_balance_loss_weight,
@@ -343,6 +372,15 @@ def train_soft_av_gaussians(
         allow_padding=False,
         bandpass=cfg.audio_bandpass,
     )
+    long_cropper = None
+    if cfg.audio_long_window_fraction > 0:
+        long_cropper = TimedAudioCropper(
+            cfg.manifest,
+            crop_seconds=cfg.audio_long_window_seconds,
+            mode=cfg.audio_long_crop_mode,
+            allow_padding=False,
+            bandpass=cfg.audio_bandpass,
+        )
     loss_history: list[dict[str, float]] = []
     steps = cfg.acoustic_steps + cfg.joint_steps
     cursor = 0
@@ -352,13 +390,28 @@ def train_soft_av_gaussians(
         for _attempt in range(len(visual_dataset)):
             candidate = visual_dataset[cursor % len(visual_dataset)]
             cursor += 1
+            preferred_cropper = (
+                long_cropper
+                if long_cropper is not None and use_long_audio_window_for_step(step, cfg.audio_long_window_fraction)
+                else cropper
+            )
             try:
-                audio_sample = cropper.get_crop(str(candidate["camera"]), candidate["time"])
+                audio_sample = preferred_cropper.get_crop(str(candidate["camera"]), candidate["time"])
+                audio_sample["crop_seconds"] = float(preferred_cropper.crop_seconds)
                 visual_sample = candidate
                 break
             except ValueError as error:
                 if "padding" not in str(error):
                     raise
+                if preferred_cropper is long_cropper:
+                    try:
+                        audio_sample = cropper.get_crop(str(candidate["camera"]), candidate["time"])
+                        audio_sample["crop_seconds"] = float(cropper.crop_seconds)
+                        visual_sample = candidate
+                        break
+                    except ValueError as fallback_error:
+                        if "padding" not in str(fallback_error):
+                            raise
         if visual_sample is None or audio_sample is None:
             raise ValueError("no non-padding Route C samples available")
         visual_sample = {
@@ -387,7 +440,9 @@ def train_soft_av_gaussians(
         )
         losses["total"].backward()
         optimizer.step()
-        loss_history.append({key: float(value.detach().cpu().item()) for key, value in losses.items()})
+        loss_record = {key: float(value.detach().cpu().item()) for key, value in losses.items()}
+        loss_record["audio_window_seconds"] = float(audio_sample.get("crop_seconds", cfg.audio_window_seconds))
+        loss_history.append(loss_record)
     save_soft_checkpoint(cfg.output, acoustic_field, audio_renderer, cfg.ftgspp_checkpoint, cfg, loss_history)
     return loss_history
 

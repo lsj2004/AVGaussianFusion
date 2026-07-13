@@ -192,6 +192,7 @@ def audio_spatial_loss(
     hop_length: int = 160,
     win_length: int = 400,
     band_lre_weight: float = 0.0,
+    tf_ild_weight: float = 0.0,
     coherence_weight: float = 0.0,
     phase_diff_weight: float = 0.0,
     energy_weight: float = 0.0,
@@ -206,6 +207,7 @@ def audio_spatial_loss(
         raise ValueError(f"audio length {pred.shape[-1]} is shorter than n_fft={n_fft}")
     for name, value in {
         "band_lre_weight": band_lre_weight,
+        "tf_ild_weight": tf_ild_weight,
         "coherence_weight": coherence_weight,
         "phase_diff_weight": phase_diff_weight,
         "energy_weight": energy_weight,
@@ -218,7 +220,7 @@ def audio_spatial_loss(
     loss = pred.new_zeros(())
     eps = pred.new_tensor(1e-7)
 
-    if band_lre_weight > 0 or phase_diff_weight > 0:
+    if band_lre_weight > 0 or tf_ild_weight > 0 or phase_diff_weight > 0:
         window = torch.hamming_window(win_length, device=pred.device, dtype=pred.dtype)
         pred_l_spec = _stft_complex(pred[0:1], n_fft, hop_length, win_length, window)[0]
         pred_r_spec = _stft_complex(pred[1:2], n_fft, hop_length, win_length, window)[0]
@@ -233,6 +235,15 @@ def audio_spatial_loss(
                 torch.nan_to_num(target_ratio, nan=0.0, posinf=0.0, neginf=0.0),
             )
             loss = loss + float(band_lre_weight) * band_lre
+
+        if tf_ild_weight > 0:
+            pred_ild = torch.log(pred_l_spec.abs().clamp_min(eps)) - torch.log(pred_r_spec.abs().clamp_min(eps))
+            target_ild = torch.log(target_l_spec.abs().clamp_min(eps)) - torch.log(target_r_spec.abs().clamp_min(eps))
+            tf_ild = F.l1_loss(
+                torch.nan_to_num(pred_ild, nan=0.0, posinf=0.0, neginf=0.0),
+                torch.nan_to_num(target_ild, nan=0.0, posinf=0.0, neginf=0.0),
+            )
+            loss = loss + float(tf_ild_weight) * tf_ild
 
         if phase_diff_weight > 0:
             pred_phase_diff = torch.angle(pred_l_spec) - torch.angle(pred_r_spec)
