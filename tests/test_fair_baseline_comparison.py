@@ -144,6 +144,23 @@ def test_build_fair_comparison_rows_includes_required_methods_and_protocol_colum
             root / f"runs/{run_name}/train_summary.json",
             {"joint_steps": 228, "warmup_steps": 1000 if "no_warmup" not in run_name else 0},
         )
+        _write_json(
+            root / f"runs/{run_name}/eval_fulltrack_audiogs_3s_nonoverlap/full_audio_summary.json",
+            {
+                "route": "B_joint_av",
+                "eval_type": "fulltrack",
+                "protocol": "audiogs_3s_nonoverlap_fulltrack",
+                "camera": "cam10",
+                "MAG": mag + 0.01,
+                "ENV": mag + 0.11,
+                "LRE": mag + 0.21,
+                "DPAM": None,
+                "DPAM_available": False,
+                "RTE": None,
+                "num_windows": 10,
+                "audio_window_seconds": 3.0,
+            },
+        )
     for out_dir, protocol, mag in [
         ("eval_fulltrack_audiogs_3s_nonoverlap", "audiogs_3s_nonoverlap_fulltrack", 0.31),
         ("eval_fulltrack_visual_center_0p5s_ola", "visual_center_overlap_add_fulltrack", 0.32),
@@ -246,6 +263,14 @@ def test_build_fair_comparison_rows_includes_required_methods_and_protocol_colum
     assert ("scene1_opera", "Separate FreeTimeGS++ baseline (visual only)") in methods
     assert ("scene1_opera", "AVFusion joint warmup") in methods
     assert ("scene1_opera", "AVFusion joint no warmup") in methods
+    assert (
+        "scene1_opera",
+        "AVFusion joint warmup (AVFusion full-track AudioGS-style 3s non-overlap)",
+    ) in methods
+    assert (
+        "scene1_opera",
+        "AVFusion joint no warmup (AVFusion full-track AudioGS-style 3s non-overlap)",
+    ) in methods
     assert ("scene1_opera", "AVFusion Route A frozen visual + audio head") in methods
     assert (
         "scene1_opera",
@@ -275,8 +300,15 @@ def test_build_fair_comparison_rows_includes_required_methods_and_protocol_colum
     assert route_a_row["dpam_protocol"] == "not_available"
     assert route_a_row["MAG"] == 0.11
     joint_rows = [row for row in rows if str(row["method"]).startswith("AVFusion joint")]
-    assert all(row["dpam_protocol"] == "sampled 16 visual-frame windows" for row in joint_rows)
-    assert all(row["metric_scope"] == "window_average" for row in joint_rows)
+    window_joint_rows = [row for row in joint_rows if row["metric_scope"] == "window_average"]
+    fulltrack_joint_rows = [row for row in joint_rows if row["metric_scope"] == "full_track"]
+    assert all(row["dpam_protocol"] == "sampled 16 visual-frame windows" for row in window_joint_rows)
+    assert len(window_joint_rows) == 2
+    assert len(fulltrack_joint_rows) == 2
+    assert all(
+        row["audio_eval_protocol"] == "AVFusion full-track AudioGS-style 3s non-overlap"
+        for row in fulltrack_joint_rows
+    )
     route_c = next(
         row
         for row in rows

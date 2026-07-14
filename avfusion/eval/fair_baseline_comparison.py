@@ -303,6 +303,48 @@ def _route_c_fulltrack_rows(
     return rows
 
 
+def _route_b_fulltrack_rows(
+    base: dict[str, Any],
+    root: Path,
+    run_name: str,
+    method_prefix: str,
+    train_summary: dict[str, Any],
+    visual_summary: dict[str, Any],
+    protocol: dict[str, Any],
+) -> list[dict[str, Any]]:
+    run_dir = root / "runs" / run_name
+    summaries = [
+        run_dir / "eval_fulltrack_audiogs_3s_nonoverlap" / "full_audio_summary.json",
+        run_dir / "eval_fulltrack_visual_center_0p5s_ola" / "full_audio_summary.json",
+    ]
+    rows = []
+    for summary_path in summaries:
+        audio_summary = _run_summary(summary_path)
+        if not audio_summary:
+            continue
+        rows.append(
+            {
+                **base,
+                "method": f"{method_prefix} ({_fulltrack_audio_protocol(audio_summary)})",
+                "steps_or_clips": train_summary.get("joint_steps"),
+                "audio_eval_protocol": _fulltrack_audio_protocol(audio_summary),
+                "metric_scope": "full_track",
+                "dpam_protocol": _joint_dpam_protocol(audio_summary),
+                "visual_eval_frames": visual_summary.get("num_frames") or protocol["num_frames"],
+                "MAG": audio_summary.get("MAG"),
+                "ENV": audio_summary.get("ENV"),
+                "LRE": audio_summary.get("LRE"),
+                "DPAM": audio_summary.get("DPAM"),
+                "RTE": audio_summary.get("RTE"),
+                "PSNR": visual_summary.get("PSNR"),
+                "MSE": visual_summary.get("MSE"),
+                "L1": visual_summary.get("L1"),
+                "artifact": _artifact(run_dir),
+            }
+        )
+    return rows
+
+
 def build_fair_comparison_rows(
     root: str | Path,
     datasets: Sequence[dict[str, Any]] | None = None,
@@ -522,6 +564,28 @@ def build_fair_comparison_rows(
                     "artifact": _artifact(root / "runs" / route_b_no_warmup_run),
                 },
             ]
+        )
+        rows.extend(
+            _route_b_fulltrack_rows(
+                base,
+                root,
+                route_b_run,
+                "AVFusion joint warmup",
+                route_b_train,
+                route_b_visual,
+                protocol,
+            )
+        )
+        rows.extend(
+            _route_b_fulltrack_rows(
+                base,
+                root,
+                route_b_no_warmup_run,
+                "AVFusion joint no warmup",
+                route_b_nowarm_train,
+                route_b_nowarm_visual,
+                protocol,
+            )
         )
         if route_b_spectral_no_warmup_run is not None and (
             root / "runs" / route_b_spectral_no_warmup_run

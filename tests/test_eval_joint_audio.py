@@ -3,9 +3,11 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import soundfile as sf
 import torch
 
 from avfusion.eval.eval_joint_audio import evaluate_joint_audio_checkpoint
+from avfusion.eval.eval_joint_audio_fulltrack import evaluate_joint_audio_fulltrack_checkpoint
 from avfusion.joint.audio_head import JointAudioHead, SpectralJointAudioHead
 from avfusion.joint.ftgspp_bridge import FTGSRendererBridge
 from avfusion.joint.model import JointAVGaussianModel
@@ -362,3 +364,74 @@ def test_evaluate_joint_audio_checkpoint_restores_spectral_audio_head(monkeypatc
 
     assert summary["MAG"] == pytest.approx(1.0)
     assert json.loads((output_dir / "audio_summary.json").read_text())["checkpoint"] == str(checkpoint)
+
+
+def test_evaluate_joint_audio_fulltrack_writes_global_metrics(monkeypatch, tmp_path):
+    manifest = _write_manifest(tmp_path)
+    aligned = tmp_path / "audio" / "aligned_16k_stereo"
+    _write_wav(aligned / "near.wav", frames=48000, value=0.5)
+    _write_wav(aligned / "cam10.wav", frames=48000, value=0.25)
+    visual_root = tmp_path / "visual"
+    np.savez(
+        visual_root / "cameras.npz",
+        names=np.array(["cam00", "cam10"]),
+        intrinsics=np.stack([np.eye(3), np.eye(3)]),
+        w2c=np.stack([np.eye(4), np.eye(4)]),
+    )
+    ftgspp_checkpoint = tmp_path / "gaussians.pt"
+    checkpoint = tmp_path / "joint.pt"
+    output_dir = tmp_path / "fulltrack"
+    ftgspp_checkpoint.write_bytes(b"placeholder")
+    model = JointAVGaussianModel(FTGSRendererBridge(FakeGaussians()), JointAudioHead(4, top_k=4))
+    save_joint_checkpoint(
+        output_path=checkpoint,
+        model=model,
+        stage="joint_finetune",
+        ftgspp_checkpoint=ftgspp_checkpoint,
+        manifest_path=manifest,
+        config={"top_k": 4, "visual_scale": 0.5, "audio_window_seconds": 0.5},
+        loss_history=[0.1],
+    )
+    monkeypatch.setattr(
+        "avfusion.train.train_joint_av_gaussians.FTGSRendererBridge.load_checkpoint",
+        lambda path: FTGSRendererBridge(FakeGaussians()),
+    )
+    metric_lengths = []
+
+    def fake_metrics(pred, target, sample_rate, include_dpam=True):
+        metric_lengths.append(pred.shape[-1])
+        return {
+            "MAG": 0.1,
+            "ENV": 0.2,
+            "LRE": 0.3,
+            "RTE": None,
+            "RTE_available": False,
+            "RTE_error": "not configured",
+            "DPAM": None,
+            "DPAM_available": False,
+            "DPAM_error": "not configured",
+        }
+
+    monkeypatch.setattr("avfusion.eval.eval_joint_audio_fulltrack.compute_audiogs_metrics", fake_metrics)
+
+    summary = evaluate_joint_audio_fulltrack_checkpoint(
+        manifest_path=manifest,
+        checkpoint_path=checkpoint,
+        output_dir=output_dir,
+        protocol="audiogs_3s_nonoverlap_fulltrack",
+        audio_window_seconds=0.5,
+        max_windows=2,
+        frame_reader=lambda path, frame_idx: torch.zeros(4, 6, 3),
+    )
+
+    assert summary["route"] == "B_joint_av"
+    assert summary["eval_type"] == "fulltrack"
+    assert summary["protocol"] == "audiogs_3s_nonoverlap_fulltrack"
+    assert summary["num_windows"] == 2
+    assert summary["audio_window_seconds"] == 0.5
+    assert summary["num_samples"] == 16000
+    assert metric_lengths == [16000]
+    assert json.loads((output_dir / "full_audio_summary.json").read_text())["MAG"] == 0.1
+    pred_audio, sample_rate = sf.read(output_dir / "pred_full.wav", always_2d=True)
+    assert sample_rate == 16000
+    assert pred_audio.shape == (16000, 2)
