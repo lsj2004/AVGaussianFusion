@@ -272,42 +272,51 @@ FreeTimeGS++ 的高斯主要服务于图像渲染，优化目标是颜色、透�
 
 ### 8.1 主表：AudioGS-style 3s non-overlap full-track
 
-这是当前最主要的音频对比协议。它按 AudioGS-style 将整段音频切成 `3s` 非重叠窗口，渲染后拼接为 full-track，再计算 `MAG / ENV / LRE`。
+这是当前最主要的音频对比协议。它按 AudioGS-style 将整段音频切成 `3s` 非重叠窗口，渲染后拼接为 full-track，再计算 `MAG / ENV / LRE`。本次 git 更新后，Route B warmup / no-warmup 也补齐了该协议下的 full-track 结果。
 
 | 数据集 | 方法 | MAG ↓ | ENV ↓ | LRE ↓ | PSNR ↑ |
 |---|---|---:|---:|---:|---:|
 | scene1_opera | AudioGS full-track | 0.1274 | 0.1014 | 0.9802 | - |
+| scene1_opera | Route B joint warmup | 0.1350 | 0.0990 | 1.0106 | 26.88 |
+| scene1_opera | Route B joint no warmup | 0.1350 | 0.0990 | 0.9967 | 26.88 |
 | scene1_opera | Route C | 0.1320 | 0.0943 | 0.2963 | 26.68 |
 | scene1_opera | Route C + stereo reg | 0.1281 | 0.0972 | 0.0405 | 26.68 |
 | scene7_playing_300 | AudioGS full-track | 0.0625 | 0.0328 | 0.1773 | - |
+| scene7_playing_300 | Route B joint warmup | 0.0848 | 0.0366 | 0.8116 | 21.84 |
+| scene7_playing_300 | Route B joint no warmup | 0.0848 | 0.0366 | 0.7976 | 21.84 |
 | scene7_playing_300 | Route C | 0.0669 | 0.0327 | 0.8018 | 21.03 |
 | scene7_playing_300 | Route C + stereo reg | 0.0633 | 0.0316 | 0.4088 | 21.03 |
 
 分析：
 
+- 新增 Route B full-track 后可以更清楚地看到：hard-sharing joint fine-tuning 的视觉 PSNR 更高，但音频 full-track 表现不占优。
+- `scene1_opera` 上，Route B warmup / no-warmup 的 `MAG` 约 `0.1350`，接近 Route C，但 `LRE` 约 `1.0`，明显弱于 Route C 的 `0.2963` 和 Route C + stereo reg 的 `0.0405`。
 - `scene1_opera` 上，Route C + stereo reg 的 `LRE` 从 Route C 的 `0.2963` 降到 `0.0405`，降幅约 `86.3%`；相比 AudioGS full-track 的 `0.9802` 也明显更低。
-- `scene1_opera` 上，Route C + stereo reg 的 `MAG` 与 AudioGS 基本持平，`ENV` 略优。
+- `scene7_playing_300` 上，Route B full-track 的 `MAG / ENV` 明显弱于 Route C 系列；`LRE` 与基础 Route C 接近，但仍明显弱于 Route C + stereo reg。
 - `scene7_playing_300` 上，Route C + stereo reg 相比 Route C 同时改善 `MAG / ENV / LRE`，其中 `LRE` 降幅约 `49.0%`。
-- `scene7_playing_300` 上，Route C + stereo reg 的 `MAG / ENV` 接近 AudioGS，但 `LRE` 仍高于 AudioGS，说明该场景双耳空间关系更难。
-- 两个数据集上，Route C + stereo reg 都保持 FreeTimeGS++ 的视觉 PSNR，不牺牲视觉质量。
+- 结论上，Route B 的优势主要体现在视觉 PSNR，Route C + stereo reg 的优势主要体现在音频 full-track，尤其是双耳空间关系。
 
-### 8.2 子表：Route C visual-center 0.5s overlap-add full-track
+### 8.2 子表：visual-center 0.5s overlap-add full-track
 
-该协议以视觉帧时间为中心裁剪 `0.5s` 音频窗口，用对应时间的 acoustic Gaussian state 渲染，再通过 overlap-add 拼接为 full-track。它更强调音视频同步和短窗连续性，不与 `3s non-overlap` 结果直接比较。
+该协议以视觉帧时间为中心裁剪 `0.5s` 音频窗口，用对应时间的 Gaussian state 渲染，再通过 overlap-add 拼接为 full-track。它更强调音视频同步和短窗连续性，不与 `3s non-overlap` 结果直接比较。本次更新后，Route B 也有该协议下的 full-track 结果。
 
 | 数据集 | 方法 | MAG ↓ | ENV ↓ | LRE ↓ | PSNR ↑ |
 |---|---|---:|---:|---:|---:|
+| scene1_opera | Route B joint warmup | 0.2215 | 0.1342 | 0.8259 | 26.88 |
+| scene1_opera | Route B joint no warmup | 0.2215 | 0.1342 | 0.8272 | 26.88 |
 | scene1_opera | Route C | 0.2045 | 0.1373 | 1.5340 | 26.68 |
 | scene1_opera | Route C + stereo reg | 0.1979 | 0.1383 | 1.1904 | 26.68 |
+| scene7_playing_300 | Route B joint warmup | 0.0874 | 0.0379 | 0.6089 | 21.84 |
+| scene7_playing_300 | Route B joint no warmup | 0.0874 | 0.0379 | 0.6094 | 21.84 |
 | scene7_playing_300 | Route C | 0.0696 | 0.0346 | 0.7297 | 21.03 |
 | scene7_playing_300 | Route C + stereo reg | 0.0660 | 0.0336 | 0.4318 | 21.03 |
 
 分析：
 
-- 在两个数据集上，stereo regularization 都降低了 overlap-add full-track 的 `LRE`。
-- `scene1_opera` 的 overlap-add `LRE` 仍较高，说明短窗拼接后的左右声道连续性仍是难点。
-- `scene7_playing_300` 上，Route C + stereo reg 在 `MAG / ENV / LRE` 都优于基础 Route C。
-- 该协议更适合观察短窗同步和连续拼接问题，不作为与 AudioGS baseline 的主结论依据。
+- `scene1_opera` 上，Route B 的 overlap-add `LRE` 低于 Route C 系列，但 `MAG` 更高；Route C + stereo reg 相比基础 Route C 改善 `MAG` 和 `LRE`。
+- `scene7_playing_300` 上，Route C + stereo reg 在 `MAG / ENV / LRE` 都是该协议下最优。
+- Route B warmup 和 no-warmup 的结果非常接近，说明在当前 full-track 协议下，warmup 对最终音频指标影响有限。
+- 该协议暴露了短窗拼接后的左右声道连续性问题：`scene1_opera` 上 Route C 系列的 `LRE` 仍偏高，需要后续加强时序/窗口一致性约束。
 
 ### 8.3 子表：Route A full-track source-to-heldout audio
 
@@ -326,7 +335,7 @@ FreeTimeGS++ 的高斯主要服务于图像渲染，优化目标是颜色、透�
 
 ### 8.4 子表：Route B visual-frame window average
 
-该协议在视觉帧对应的音频窗口上评估，并对窗口指标求平均，不是 full-track 拼接结果。因此它主要用于 Route B 内部 ablation。
+该协议在视觉帧对应的音频窗口上评估，并对窗口指标求平均，不是 full-track 拼接结果。Route B 的 full-track 结果已经在 8.1 和 8.2 中按协议纳入；本表只保留历史 window-average ablation。
 
 | 数据集 | 方法 | MAG ↓ | ENV ↓ | LRE ↓ | PSNR ↑ |
 |---|---|---:|---:|---:|---:|
@@ -338,7 +347,7 @@ FreeTimeGS++ 的高斯主要服务于图像渲染，优化目标是颜色、透�
 分析：
 
 - Route B 的视觉 PSNR 高于冻结视觉 baseline，说明 joint fine-tuning 对 RGB 有收益。
-- 但音频指标不稳定，尤其 `LRE` 并没有稳定改善。
+- window-average 与新增 full-track 结果都显示，Route B 的音频空间指标不够稳定，尤其 `LRE` 没有形成稳定优势。
 - 这支持当前判断：Route B 更适合作为 hard-sharing ablation，而不是最终主方案。
 
 ### 8.5 子表：FreeTimeGS++ visual-only
@@ -364,9 +373,9 @@ FreeTimeGS++ 的高斯主要服务于图像渲染，优化目标是颜色、透�
 当前结论：
 
 - Route A 跑通了 FreeTimeGS++ + AudioGS 的基础融合，但音频能力不足。
-- Route B 验证了 hard-sharing joint optimization，但视觉和音频互相牵制，稳定性不够。
+- Route B 验证了 hard-sharing joint optimization：视觉 PSNR 有收益，但新增 full-track 结果显示音频空间指标仍不稳定。
 - Route C 是更合理的结构：视觉冻结、声学独立、软耦合。
-- Latest stereo regularization 显著改善 LRE，尤其 `scene1_opera` 上已经明显优于 AudioGS full-track。
+- Latest stereo regularization 显著改善 LRE，尤其 `scene1_opera` 的 3s full-track 协议下优势明显。
 - `scene7_playing_300` 上 MAG/ENV 已接近 AudioGS，但 LRE 仍有差距，说明双耳空间建模还需要加强。
 
 ## 10. 后续方向
@@ -386,6 +395,7 @@ FreeTimeGS++ 的高斯主要服务于图像渲染，优化目标是颜色、透�
 - frequency transfer renderer：`avfusion/soft/frequency_transfer_renderer.py`
 - audio / stereo losses：`avfusion/audio/losses.py`
 - Route C full-track eval：`avfusion/eval/eval_soft_audio_fulltrack.py`
+- Route B full-track eval：`avfusion/eval/eval_joint_audio_fulltrack.py`
 - fair comparison：`avfusion/eval/fair_baseline_comparison.py`
 - latest stereo reg config：`configs/scene1_opera_c_soft_av_gaussians_stereo_reg.yaml`
 - latest stereo reg config：`configs/scene7_playing_300_c_soft_av_gaussians_stereo_reg.yaml`
